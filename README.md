@@ -1,29 +1,122 @@
 # Bubble Town
 
-Hermes Web 客户端骨架工程，采用 `Electron + React + Fastify companion + shared types` 的 monorepo 结构。
+[Chinese README](./README.zh-CN.md)
 
-## 工作区
+Bubble Town is a desktop and web client project for Hermes, organized as a monorepo and built on `Electron + React + Vite + Fastify + TypeScript`.
 
-- `apps/web`: React + Vite 前端
-- `apps/companion`: 本地 Fastify companion 服务
-- `apps/desktop`: Electron 主进程与 preload
-- `packages/shared`: 前后端共享类型
+Instead of rebuilding a separate chat backend, Bubble Town focuses on providing an extensible Hermes client experience through a local Companion service and a desktop shell.
 
-## 常用命令
+## Overview
+
+- `apps/web`: React + Vite frontend
+- `apps/companion`: local Fastify Companion service that bridges the UI and Hermes capabilities
+- `apps/desktop`: Electron shell that loads the web app and bundles local resources
+- `packages/shared`: shared types and contracts used across apps
+
+## Tech Stack
+
+- Frontend: React 18, React Router, TanStack Query, Zustand, Tailwind CSS v4
+- Backend: Fastify
+- Desktop: Electron, electron-builder
+- Tooling: TypeScript, Vitest, ESLint, npm workspaces
+
+## Repository Layout
+
+```text
+bubble-town/
+├─ apps/
+│  ├─ web/          # Frontend app
+│  ├─ companion/    # Local Companion service
+│  └─ desktop/      # Electron main process and preload
+├─ packages/
+│  └─ shared/       # Shared types
+├─ README.md
+└─ README.zh-CN.md
+```
+
+## Quick Start
+
+### Requirements
+
+- Node.js 20+
+- npm 10+
+
+### Install
 
 ```bash
 npm install
-npm run dev
-npm run dev:web
-npm run dev:backend
-npm run dev:desktop
-npm run dev:all
-npm run check
-npm run test
 ```
 
-- `npm run dev`: 同时启动本地 `web + backend`
-- `npm run dev:web`: 仅启动本地 Web 开发服务器
-- `npm run dev:backend`: 仅启动本地 backend（Fastify companion）
-- `npm run dev:desktop`: 仅启动 desktop 壳
-- `npm run dev:all`: 同时启动 `web + backend + desktop` 联调环境
+### Start Development
+
+```bash
+npm run dev
+```
+
+This starts:
+
+- the web frontend
+- the local Companion service
+
+To run the desktop shell together with them:
+
+```bash
+npm run dev:all
+```
+
+## Common Commands
+
+| Command | Description |
+| --- | --- |
+| `npm run dev` | Start the `web + companion` development environment |
+| `npm run dev:web` | Start only the web frontend |
+| `npm run dev:backend` | Start only the local Companion service |
+| `npm run dev:companion` | Alias of `dev:backend` |
+| `npm run dev:desktop` | Start only the Electron desktop shell |
+| `npm run dev:all` | Start `web + companion + desktop` together |
+| `npm run check` | Run TypeScript checks across workspaces |
+| `npm run test` | Run workspace tests |
+| `npm run build` | Build all workspaces |
+| `npm run package:desktop` | Build and package the desktop app |
+
+## Development Notes
+
+### Web
+
+`apps/web` is built with Vite and is intended for fast iteration on the chat UI, session list, settings pages, and shared UI components.
+
+### Companion
+
+`apps/companion` is a local Fastify service that centralizes configuration, sessions, and Hermes integration logic so the frontend can rely on a stable local API layer.
+
+### Desktop
+
+`apps/desktop` contains the Electron main process and preload layer. Desktop packaging includes the following resources:
+
+- `apps/web/dist`
+- `apps/companion/dist`
+- `apps/companion/package.json`
+
+## Packaging
+
+```bash
+npm run package:desktop
+```
+
+The packaged output is written to `apps/desktop/release` by default.
+
+## Current Status
+
+The repository already includes:
+
+- a web frontend foundation
+- a local Companion service
+- an Electron desktop shell
+- shared type definitions
+- basic tests and type-check scripts
+
+It is suitable as a foundation for continued Hermes client development.
+
+## License
+
+Add a dedicated license file before publishing this repository as open source.
