@@ -1,0 +1,62 @@
+{
+  "name": "@bubble-town/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Bubble Town desktop shell",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "ELECTRON_RENDERER_URL=http://localhost:5173 ELECTRON_COMPANION_URL=http://127.0.0.1:3030 electron ./electron/main.cjs",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "package": "electron-builder",
+    "package:dir": "electron-builder --dir"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@bubble-town/shared": "file:../../packages/shared",
+    "fastify": "^5.3.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "electron": "35.1.5",
+    "electron-builder": "^26.0.12",
+    "tsx": "^4.19.4",
+    "typescript": "~5.8.3"
+  },
+  "build": {
+    "appId": "ai.trae.bubble-town",
+    "productName": "Bubble Town",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/*.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web-dist"
+      },
+      {
+        "from": "../companion/dist",
+        "to": "companion/dist"
+      },
+      {
+        "from": "../companion/package.json",
+        "to": "companion/package.json"
+      }
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "electronVersion": "35.1.5",
+    "npmRebuild": false
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "bubble-town",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev": "concurrently -n web,backend -c cyan,magenta \"npm run dev:web\" \"npm run dev:backend\"",
+    "dev:all": "concurrently -n web,backend,desktop -c cyan,magenta,yellow \"npm run dev:web\" \"npm run dev:backend\" \"npm run dev:desktop\"",
+    "dev:web": "npm run dev -w @bubble-town/web",
+    "dev:backend": "npm run dev -w @bubble-town/companion",
+    "dev:companion": "npm run dev -w @bubble-town/companion",
+    "dev:desktop": "npm run dev -w @bubble-town/desktop",
+    "check": "npm run check --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "package:desktop": "npm run build --workspaces --if-present && npm run package -w @bubble-town/desktop",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

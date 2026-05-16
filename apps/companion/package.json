@@ -1,0 +1,22 @@
+{
+  "name": "@bubble-town/companion",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@bubble-town/shared": "file:../../packages/shared",
+    "@fastify/cors": "^10.0.2",
+    "fastify": "^5.3.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "tsx": "^4.19.4",
+    "typescript": "~5.8.3"
+  }
+}
