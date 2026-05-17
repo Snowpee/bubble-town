@@ -40,6 +40,8 @@ interface SessionTranscript {
 
 interface ChatTurnContext {
   profileId: string;
+  apiBaseUrl: string;
+  managedGatewayProfile: boolean;
   sessionId?: string;
   responseId?: string;
   transcriptKey?: string;
@@ -64,6 +66,11 @@ interface StreamChatOptions {
   signal?: AbortSignal;
 }
 
+interface ChatExecutionOptions {
+  apiBaseUrl?: string;
+  managedGatewayProfileId?: string;
+}
+
 interface PersistOptions {
   sessionId?: string;
   responseId?: string;
@@ -86,8 +93,8 @@ function getHermesApiBaseUrl(): string {
   return process.env.HERMES_API_BASE_URL ?? 'http://127.0.0.1:8642/v1';
 }
 
-function resolveProfileRuntime(profileId = DEFAULT_PROFILE_ID): HermesProfileRuntime {
-  if (isManagedHermesGatewayProfile(profileId)) {
+function resolveProfileRuntime(profileId = DEFAULT_PROFILE_ID, managedGatewayProfile = isManagedHermesGatewayProfile(profileId)): HermesProfileRuntime {
+  if (managedGatewayProfile) {
     return {
       model: 'hermes-agent',
     };
@@ -531,10 +538,10 @@ function deleteTranscript(profileId: string, cacheKey?: string): void {
   }
 }
 
-function createChatTurnContext(request: ChatRequest, mode: ChatMode): ChatTurnContext {
+function createChatTurnContext(request: ChatRequest, mode: ChatMode, executionOptions: ChatExecutionOptions = {}): ChatTurnContext {
   const profileId = request.profileId || DEFAULT_PROFILE_ID;
-  const runtime = resolveProfileRuntime(profileId);
-  const managedGatewayProfile = isManagedHermesGatewayProfile(profileId);
+  const managedGatewayProfile = executionOptions.managedGatewayProfileId === profileId || isManagedHermesGatewayProfile(profileId);
+  const runtime = resolveProfileRuntime(profileId, managedGatewayProfile);
   const sessionId = resolveRequestSessionId(request);
   const transcriptKey = sessionId;
   const now = new Date().toISOString();
@@ -550,6 +557,8 @@ function createChatTurnContext(request: ChatRequest, mode: ChatMode): ChatTurnCo
 
   return {
     profileId,
+    apiBaseUrl: executionOptions.apiBaseUrl ?? getHermesApiBaseUrl(),
+    managedGatewayProfile,
     sessionId,
     responseId: request.responseId,
     transcriptKey,
@@ -612,7 +621,7 @@ function persistConversationTurn(
     return {};
   }
 
-  if (isManagedHermesGatewayProfile(context.profileId)) {
+  if (context.managedGatewayProfile) {
     context.sessionId = canonicalSessionId;
     context.responseId = options.responseId ?? context.responseId;
     context.transcriptKey = canonicalSessionId;
@@ -1030,12 +1039,13 @@ export async function streamChat(
   request: ChatRequest,
   handlers: StreamChatHandlers = {},
   options: StreamChatOptions = {},
+  executionOptions: ChatExecutionOptions = {},
 ): Promise<ChatResponse> {
   const mode = resolveEffectiveChatMode(request, getChatMode(request.mode));
-  const context = createChatTurnContext(request, mode);
+  const context = createChatTurnContext(request, mode, executionOptions);
   const now = new Date().toISOString();
   const payload = buildRequestPayload(mode, context, request, now, true);
-  const response = await fetch(`${getHermesApiBaseUrl()}${getRequestPath(mode)}`, {
+  const response = await fetch(`${context.apiBaseUrl}${getRequestPath(mode)}`, {
     method: 'POST',
     headers: buildHermesRequestHeaders(context),
     body: JSON.stringify(payload),
@@ -1186,13 +1196,13 @@ export async function streamChat(
   return completeEvent;
 }
 
-export async function sendChat(request: ChatRequest): Promise<ChatResponse> {
+export async function sendChat(request: ChatRequest, executionOptions: ChatExecutionOptions = {}): Promise<ChatResponse> {
   const mode = resolveEffectiveChatMode(request, getChatMode(request.mode));
-  const context = createChatTurnContext(request, mode);
+  const context = createChatTurnContext(request, mode, executionOptions);
   const now = new Date().toISOString();
   const payload = buildRequestPayload(mode, context, request, now, false);
 
-  const response = await fetch(`${getHermesApiBaseUrl()}${getRequestPath(mode)}`, {
+  const response = await fetch(`${context.apiBaseUrl}${getRequestPath(mode)}`, {
     method: 'POST',
     headers: buildHermesRequestHeaders(context),
     body: JSON.stringify(payload),
