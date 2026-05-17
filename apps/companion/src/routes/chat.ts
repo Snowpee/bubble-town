@@ -38,8 +38,11 @@ export async function registerChatRoutes(app: FastifyInstance) {
       attachments?: ChatImageAttachment[];
       mode?: 'responses' | 'chat-completions';
     };
-    await ensureManagedHermesGateway(body.profileId);
-    return sendChat(body);
+    const gateway = await ensureManagedHermesGateway(body.profileId);
+    return sendChat(body, {
+      apiBaseUrl: gateway.apiBaseUrl,
+      managedGatewayProfileId: gateway.profileId,
+    });
   });
 
   app.post('/api/chat/respond-stream', async (request, reply) => {
@@ -73,7 +76,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     });
 
     try {
-      await ensureManagedHermesGateway(body.profileId);
+      const gateway = await ensureManagedHermesGateway(body.profileId);
       await streamChat(body, {
         onStart: (event: ChatStreamStartEvent) => writeSseEvent(reply, 'message-start', event),
         onDelta: (delta: string) => writeSseEvent(reply, 'message-delta', { delta } satisfies ChatStreamDeltaEvent),
@@ -81,6 +84,9 @@ export async function registerChatRoutes(app: FastifyInstance) {
         onComplete: (event: ChatStreamCompleteEvent) => writeSseEvent(reply, 'message-complete', event),
       }, {
         signal: abortController.signal,
+      }, {
+        apiBaseUrl: gateway.apiBaseUrl,
+        managedGatewayProfileId: gateway.profileId,
       });
     } catch (error) {
       if (isAbortError(error)) {

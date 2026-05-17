@@ -49,7 +49,7 @@ function getManagedGatewayApiKey(): string {
 let gatewaySpawner: GatewaySpawner = ({ profileId, port }) => {
   const profileHome = getProfileHome(profileId);
   const apiKey = getManagedGatewayApiKey();
-  const child = spawn(process.env.HERMES_BINARY ?? 'hermes', ['gateway'], {
+  const child = spawn(process.env.HERMES_BINARY ?? 'hermes', ['gateway', 'run', '--replace', '--accept-hooks'], {
     env: {
       ...process.env,
       HERMES_HOME: profileHome,
@@ -322,7 +322,7 @@ export function setHermesGatewaySpawnerForTests(spawner: GatewaySpawner): void {
 export function resetHermesGatewaySpawnerForTests(): void {
   gatewaySpawner = ({ profileId, port }) => {
     const profileHome = getProfileHome(profileId);
-    const child = spawn(process.env.HERMES_BINARY ?? 'hermes', ['gateway'], {
+    const child = spawn(process.env.HERMES_BINARY ?? 'hermes', ['gateway', 'run', '--replace', '--accept-hooks'], {
       env: {
         ...process.env,
         HERMES_HOME: profileHome,

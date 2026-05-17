@@ -900,3 +900,76 @@ test('Bubble Town 专用 Hermes 网关已切到目标 profile 时，不再注入
     cleanupHermesHome(hermesHome);
   }
 });
+
+test('sendChat 使用路由传入的 gateway snapshot，不受全局 gateway 后续切换影响', async () => {
+  const hermesHome = createHermesHome();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; payload: Record<string, unknown> }> = [];
+  ensureProfileSessionsDir(hermesHome, 'sami');
+  writeProfileConfig(hermesHome, 'sami', {
+    modelDefault: 'deepseek-v4-flash',
+    systemPrompt: '你是 Sami。',
+  });
+  setManagedHermesGatewayProfileForTests('default', 'http://127.0.0.1:8643/v1');
+
+  globalThis.fetch = async (input, init) => {
+    const payload = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+    fetchCalls.push({
+      url: String(input),
+      payload,
+    });
+
+    return new Response(
+      JSON.stringify({
+        id: 'resp_snapshot_1',
+        model: 'hermes-agent',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [
+              {
+                type: 'output_text',
+                text: '使用 snapshot gateway。',
+              },
+            ],
+          },
+        ],
+      }),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Hermes-Session-Id': 'native-snapshot-profile-1',
+        },
+      },
+    );
+  };
+
+  try {
+    const response = await sendChat(
+      {
+        input: '你好',
+        profileId: 'sami',
+      },
+      {
+        apiBaseUrl: 'http://127.0.0.1:9999/v1',
+        managedGatewayProfileId: 'sami',
+      },
+    );
+
+    assert.equal(response.sessionId, 'native-snapshot-profile-1');
+    assert.equal(fetchCalls[0]?.url, 'http://127.0.0.1:9999/v1/responses');
+    assert.deepEqual(fetchCalls[0]?.payload, {
+      model: 'hermes-agent',
+      input: '你好',
+      stream: false,
+      store: true,
+    });
+    assert.equal(transcriptFileExists(hermesHome, 'native-snapshot-profile-1', 'sami'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    resetManagedHermesGatewayStateForTests();
+    cleanupHermesHome(hermesHome);
+  }
+});

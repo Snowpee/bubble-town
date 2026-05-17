@@ -45,7 +45,18 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   try {
     await ensureManagedHermesGateway(getActiveProfileId());
   } catch (error) {
-    app.log.warn({ error }, 'Bubble Town 专用 Hermes 网关启动失败。');
+    app.log.warn(
+      {
+        error:
+          error instanceof Error
+            ? {
+                message: error.message,
+                stack: error.stack,
+              }
+            : error,
+      },
+      'Bubble Town 专用 Hermes 网关启动失败。',
+    );
   }
   return app;
 }
