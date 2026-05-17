@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MoreHorizontal, Plus } from 'lucide-react';
-import { DEFAULT_PROFILE_ID, type ProfileSummary } from '@bubble-town/shared';
+import { DEFAULT_PROFILE_ID, type ProfileSummary, type ProfilesResponse } from '@bubble-town/shared';
 import { LoadingLabel, ProfileGridSkeleton } from '@/components/loading/loading-state';
 import { createProfile, deleteProfile, fetchProfiles, renameProfile, switchProfile } from '@/lib/api/profiles';
+import { markActiveProfileInResponse } from '@/lib/api/profile-cache';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -26,7 +27,11 @@ export function ProfilesRoute() {
   const switchProfileMutation = useMutation({
     mutationFn: switchProfile,
     onSuccess: (result) => {
-      setActiveProfileId(result.activeProfile?.id ?? DEFAULT_PROFILE_ID);
+      const nextProfileId = result.activeProfile?.id ?? DEFAULT_PROFILE_ID;
+      queryClient.setQueryData<ProfilesResponse>(['profiles'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
+      queryClient.setQueryData<ProfilesResponse>(['profiles-page'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
+      queryClient.setQueryData<ProfilesResponse>(['profiles-settings'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
+      setActiveProfileId(nextProfileId);
       void queryClient.invalidateQueries({ queryKey: ['profiles'] });
       void queryClient.invalidateQueries({ queryKey: ['profiles-page'] });
       void queryClient.invalidateQueries({ queryKey: ['sessions'] });

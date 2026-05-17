@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { DEFAULT_PROFILE_ID } from '@bubble-town/shared';
+import { DEFAULT_PROFILE_ID, type ProfilesResponse } from '@bubble-town/shared';
 import { fetchHealth } from '@/lib/api/hermes';
 import { LoadingLabel, SettingsPanelSkeleton, StatusCardSkeleton } from '@/components/loading/loading-state';
+import { markActiveProfileInResponse } from '@/lib/api/profile-cache';
 import { fetchProfiles, switchProfile } from '@/lib/api/profiles';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { StatusCard } from '@/components/hermes/status-card';
@@ -20,7 +21,11 @@ export function SettingsRoute() {
   const switchProfileMutation = useMutation({
     mutationFn: switchProfile,
     onSuccess: async (result) => {
-      setActiveProfileId(result.activeProfile?.id ?? DEFAULT_PROFILE_ID);
+      const nextProfileId = result.activeProfile?.id ?? DEFAULT_PROFILE_ID;
+      queryClient.setQueryData<ProfilesResponse>(['profiles'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
+      queryClient.setQueryData<ProfilesResponse>(['profiles-page'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
+      queryClient.setQueryData<ProfilesResponse>(['profiles-settings'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
+      setActiveProfileId(nextProfileId);
       await queryClient.invalidateQueries({ queryKey: ['profiles'] });
       await queryClient.invalidateQueries({ queryKey: ['profiles-page'] });
       await queryClient.invalidateQueries({ queryKey: ['profiles-settings'] });
