@@ -6,6 +6,8 @@ import { registerConfigRoutes } from './routes/config.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerProfileRoutes } from './routes/profiles.js';
 import { registerSessionRoutes } from './routes/sessions.js';
+import { ensureManagedHermesGateway, stopManagedHermesGateway } from './services/hermes-gateway.js';
+import { getActiveProfileId } from './services/profile-store.js';
 
 const defaultPort = Number(process.env.COMPANION_PORT ?? 3030);
 const defaultHost = process.env.COMPANION_HOST ?? '127.0.0.1';
@@ -25,6 +27,10 @@ export async function createCompanionServer() {
   await registerSessionRoutes(app);
   await registerChatRoutes(app);
 
+  app.addHook('onClose', async () => {
+    await stopManagedHermesGateway();
+  });
+
   app.get('/api/ping', async () => ({ ok: true }));
 
   return app;
@@ -36,6 +42,11 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const host = options.host ?? defaultHost;
 
   await app.listen({ port, host });
+  try {
+    await ensureManagedHermesGateway(getActiveProfileId());
+  } catch (error) {
+    app.log.warn({ error }, 'Bubble Town 专用 Hermes 网关启动失败。');
+  }
   return app;
 }
 

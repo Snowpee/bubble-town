@@ -4,7 +4,7 @@ import type { CreateProfileRequest, ProfileSummary, UpdateProfileRequest } from 
 import { runHermesProfileCommand } from './profile-cli.js';
 import { DEFAULT_PROFILE_ID, getActiveProfilePath, getProfileHome, getProfilesRoot, getSessionsDir } from './hermes-paths.js';
 
-function readActiveProfileId(): string {
+export function getActiveProfileId(): string {
   const activeProfilePath = getActiveProfilePath();
   if (!fs.existsSync(activeProfilePath)) {
     return DEFAULT_PROFILE_ID;
@@ -46,7 +46,7 @@ function buildProfileSummary(profileId: string, activeProfileId: string): Profil
 }
 
 export function listProfiles(): ProfileSummary[] {
-  const activeProfileId = readActiveProfileId();
+  const activeProfileId = getActiveProfileId();
   const profiles = [buildProfileSummary(DEFAULT_PROFILE_ID, activeProfileId)];
   const profilesRoot = getProfilesRoot();
 
@@ -70,7 +70,7 @@ export function listProfiles(): ProfileSummary[] {
 export function createProfile(input: CreateProfileRequest): ProfileSummary {
   runHermesProfileCommand(['create', input.name, '--clone', '--no-alias']);
   const createdId = input.name.trim().toLowerCase().replace(/\s+/g, '-');
-  return listProfiles().find((profile) => profile.id === createdId) ?? buildProfileSummary(createdId, readActiveProfileId());
+  return listProfiles().find((profile) => profile.id === createdId) ?? buildProfileSummary(createdId, getActiveProfileId());
 }
 
 export function renameProfile(id: string, input: UpdateProfileRequest): ProfileSummary | undefined {

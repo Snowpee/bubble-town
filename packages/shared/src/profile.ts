@@ -1,3 +1,5 @@
+export const DEFAULT_PROFILE_ID = 'default';
+
 export interface ProfileSummary {
   id: string;
   name: string;

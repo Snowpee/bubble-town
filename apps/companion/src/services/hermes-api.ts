@@ -1,5 +1,7 @@
 import fs from 'node:fs';
+import YAML from 'yaml';
 import type {
+  ChatImageAttachment,
   ChatMessage,
   ChatMode,
   ChatRequest,
@@ -8,14 +10,16 @@ import type {
   ChatStreamStartEvent,
   ChatStreamToolProgressEvent,
 } from '@bubble-town/shared';
-import { DEFAULT_PROFILE_ID, getSessionFilePath, getSessionsDir } from './hermes-paths.js';
-import { getSessionDetail, getSessionIdForResponse } from './session-store.js';
+import { DEFAULT_PROFILE_ID, getConfigPath, getSessionFilePath, getSessionsDir } from './hermes-paths.js';
+import { isManagedHermesGatewayProfile } from './hermes-gateway.js';
+import { getSessionDetail, getSessionIdForResponse, getSessionSummary } from './session-store.js';
 
 interface TranscriptMessage {
   id?: string;
   role?: string;
-  content?: string;
+  content?: unknown;
   created_at?: string;
+  attachments?: ChatImageAttachment[];
   tool_events?: ChatStreamToolProgressEvent[];
 }
 
@@ -40,6 +44,9 @@ interface ChatTurnContext {
   responseId?: string;
   transcriptKey?: string;
   transcript?: SessionTranscript;
+  model: string;
+  systemPrompt?: string;
+  useSessionContinuationHeader?: boolean;
 }
 
 interface PersistedTurn {
@@ -65,8 +72,54 @@ interface PersistOptions {
 
 type JsonRecord = Record<string, unknown>;
 
+interface MessageParts {
+  text: string;
+  attachments: ChatImageAttachment[];
+}
+
+interface HermesProfileRuntime {
+  model: string;
+  systemPrompt?: string;
+}
+
 function getHermesApiBaseUrl(): string {
   return process.env.HERMES_API_BASE_URL ?? 'http://127.0.0.1:8642/v1';
+}
+
+function resolveProfileRuntime(profileId = DEFAULT_PROFILE_ID): HermesProfileRuntime {
+  if (isManagedHermesGatewayProfile(profileId)) {
+    return {
+      model: 'hermes-agent',
+    };
+  }
+
+  const configPath = getConfigPath(profileId);
+  const runtime: HermesProfileRuntime = {
+    model: 'hermes-agent',
+  };
+
+  if (!fs.existsSync(configPath)) {
+    return runtime;
+  }
+
+  try {
+    const parsed = YAML.parse(fs.readFileSync(configPath, 'utf8')) as {
+      model?: { default?: unknown };
+      agent?: { system_prompt?: unknown };
+    } | null;
+
+    if (typeof parsed?.model?.default === 'string' && parsed.model.default.trim()) {
+      runtime.model = parsed.model.default.trim();
+    }
+
+    if (typeof parsed?.agent?.system_prompt === 'string' && parsed.agent.system_prompt.trim()) {
+      runtime.systemPrompt = parsed.agent.system_prompt;
+    }
+  } catch {
+    return runtime;
+  }
+
+  return runtime;
 }
 
 function getChatMode(mode?: ChatMode): ChatMode {
@@ -77,37 +130,189 @@ function getRequestPath(mode?: ChatMode): string {
   return getChatMode(mode) === 'chat-completions' ? '/chat/completions' : '/responses';
 }
 
+function resolveEffectiveChatMode(request: ChatRequest, requestedMode: ChatMode): ChatMode {
+  if (requestedMode !== 'responses' || request.responseId) {
+    return requestedMode;
+  }
+
+  const sessionId = resolveRequestSessionId(request);
+  if (!sessionId) {
+    return requestedMode;
+  }
+
+  const summary = getSessionSummary(sessionId, request.profileId);
+  return summary?.source === 'cli' ? 'chat-completions' : requestedMode;
+}
+
 function resolveRequestSessionId(request: ChatRequest): string | undefined {
   const compatibilityRequest = request as ChatRequest & { conversation?: string };
   return request.sessionId ?? compatibilityRequest.conversation;
 }
 
-function normalizeContent(content: unknown): string {
+function normalizeImageAttachments(value: unknown): ChatImageAttachment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') {
+      return [];
+    }
+
+    const attachment = item as Partial<ChatImageAttachment>;
+    if (attachment.type !== 'image' || typeof attachment.url !== 'string' || !attachment.url.trim()) {
+      return [];
+    }
+
+    return [
+      {
+        type: 'image' as const,
+        url: attachment.url,
+        mimeType: typeof attachment.mimeType === 'string' ? attachment.mimeType : undefined,
+        name: typeof attachment.name === 'string' ? attachment.name : undefined,
+      },
+    ];
+  });
+}
+
+function dedupeAttachments(attachments: ChatImageAttachment[]): ChatImageAttachment[] {
+  const seen = new Set<string>();
+  return attachments.filter((attachment) => {
+    const identity = `${attachment.url}|${attachment.name ?? ''}`;
+    if (seen.has(identity)) {
+      return false;
+    }
+    seen.add(identity);
+    return true;
+  });
+}
+
+function extractMessageParts(content: unknown, fallbackAttachments?: unknown): MessageParts {
+  const attachments = [...normalizeImageAttachments(fallbackAttachments)];
+
   if (typeof content === 'string') {
-    return content;
+    return { text: content, attachments: dedupeAttachments(attachments) };
   }
 
   if (Array.isArray(content)) {
-    return content.map((item) => normalizeContent(item)).filter(Boolean).join('\n');
+    const textSegments: string[] = [];
+
+    for (const item of content) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+
+      const record = item as JsonRecord;
+      const type = typeof record.type === 'string' ? record.type : undefined;
+
+      if ((type === 'text' || type === 'input_text' || type === 'output_text') && typeof record.text === 'string') {
+        textSegments.push(record.text);
+        continue;
+      }
+
+      if (type === 'image_url') {
+        const imagePayload =
+          record.image_url && typeof record.image_url === 'object' ? (record.image_url as JsonRecord) : undefined;
+        const url = typeof imagePayload?.url === 'string' ? imagePayload.url : undefined;
+        if (url) {
+          attachments.push({ type: 'image', url });
+        }
+        continue;
+      }
+
+      if (type === 'input_image' && typeof record.image_url === 'string') {
+        attachments.push({ type: 'image', url: record.image_url });
+        continue;
+      }
+
+      if ('content' in record) {
+        const nested = extractMessageParts(record.content, record.attachments);
+        if (nested.text) {
+          textSegments.push(nested.text);
+        }
+        attachments.push(...nested.attachments);
+        continue;
+      }
+
+      if (typeof record.text === 'string') {
+        textSegments.push(record.text);
+      }
+    }
+
+    return {
+      text: textSegments.filter(Boolean).join('\n'),
+      attachments: dedupeAttachments(attachments),
+    };
   }
 
   if (content && typeof content === 'object') {
     if ('text' in content && typeof content.text === 'string') {
-      return content.text;
+      return { text: content.text, attachments: dedupeAttachments(attachments) };
     }
 
     if ('content' in content) {
-      return normalizeContent(content.content);
+      return extractMessageParts(content.content, fallbackAttachments);
     }
 
     if ('arguments' in content && typeof content.arguments === 'string') {
-      return content.arguments;
+      return { text: content.arguments, attachments: dedupeAttachments(attachments) };
     }
-
-    return JSON.stringify(content);
   }
 
-  return '';
+  return { text: '', attachments: dedupeAttachments(attachments) };
+}
+
+function normalizeContent(content: unknown, fallbackAttachments?: unknown): string {
+  return extractMessageParts(content, fallbackAttachments).text;
+}
+
+function buildResponsesInput(request: ChatRequest): string | Array<{ role: 'user'; content: Array<Record<string, unknown>> }> {
+  if (!request.attachments?.length) {
+    return request.input;
+  }
+
+  return [
+    {
+      role: 'user',
+      content: [
+        ...(request.input
+          ? [
+              {
+                type: 'input_text',
+                text: request.input,
+              },
+            ]
+          : []),
+        ...request.attachments.map((attachment) => ({
+          type: 'input_image',
+          image_url: attachment.url,
+        })),
+      ],
+    },
+  ];
+}
+
+function toChatCompletionContent(text: string, attachments?: ChatImageAttachment[]) {
+  if (!attachments?.length) {
+    return text;
+  }
+
+  return [
+    ...(text
+      ? [
+          {
+            type: 'text',
+            text,
+          },
+        ]
+      : []),
+    ...attachments.map((attachment) => ({
+      type: 'image_url',
+      image_url: {
+        url: attachment.url,
+      },
+    })),
+  ];
 }
 
 function summarizeText(value: string, maxLength = 120): string {
@@ -125,84 +330,114 @@ function createTranscriptMessage(
   content: string,
   createdAt: string,
   toolEvents?: ChatStreamToolProgressEvent[],
+  attachments?: ChatImageAttachment[],
 ): TranscriptMessage {
   return {
     id,
     role,
     content,
     created_at: createdAt,
+    ...(attachments?.length ? { attachments } : {}),
     ...(toolEvents?.length ? { tool_events: toolEvents } : {}),
   };
 }
 
-function createEmptyTranscript(now: string, sessionId: string): SessionTranscript {
+function createEmptyTranscript(now: string, sessionId: string, runtime?: HermesProfileRuntime): SessionTranscript {
   return {
     session_id: sessionId,
-    model: 'hermes-agent',
+    model: runtime?.model ?? 'hermes-agent',
     base_url: getHermesApiBaseUrl(),
     platform: 'api-server',
     session_start: now,
     last_updated: now,
+    ...(runtime?.systemPrompt ? { system_prompt: runtime.systemPrompt } : {}),
     message_count: 0,
     messages: [],
   };
 }
 
-function ensureTranscriptExists(profileId: string, sessionId: string, transcript: SessionTranscript | undefined, now: string) {
+function ensureTranscriptExists(
+  profileId: string,
+  sessionId: string,
+  transcript: SessionTranscript | undefined,
+  now: string,
+  runtime?: HermesProfileRuntime,
+) {
   if (transcript) {
     return transcript;
   }
 
-  const created = createEmptyTranscript(now, sessionId);
+  const created = createEmptyTranscript(now, sessionId, runtime);
   writeTranscript(profileId, sessionId, created);
   return created;
 }
 
 function mapTranscriptToChatMessages(transcript: SessionTranscript, sessionId: string, now: string): ChatMessage[] {
   return (transcript.messages ?? [])
-    .map((message, index) => ({
-      id: message.id ?? `${sessionId}-${index + 1}`,
-      role: (message.role as ChatMessage['role']) ?? 'assistant',
-      content: message.content ?? '',
-      createdAt: message.created_at ?? transcript.session_start ?? now,
-      toolEvents: Array.isArray(message.tool_events) ? message.tool_events : undefined,
-    }))
+    .map((message, index) => {
+      const parts = extractMessageParts(message.content, message.attachments);
+      return {
+        id: message.id ?? `${sessionId}-${index + 1}`,
+        role: (message.role as ChatMessage['role']) ?? 'assistant',
+        content: parts.text,
+        attachments: parts.attachments.length ? parts.attachments : undefined,
+        createdAt: message.created_at ?? transcript.session_start ?? now,
+        toolEvents: Array.isArray(message.tool_events) ? message.tool_events : undefined,
+      };
+    })
     .filter((message) => message.role === 'system' || message.role === 'user' || message.role === 'assistant');
 }
 
-function toChatCompletionMessages(messages: ChatMessage[], input: string) {
+function toChatCompletionMessages(
+  messages: ChatMessage[],
+  input: string,
+  attachments?: ChatImageAttachment[],
+  systemPrompt?: string,
+) {
   return [
+    ...(systemPrompt
+      ? [
+          {
+            role: 'system' as const,
+            content: systemPrompt,
+          },
+        ]
+      : []),
     ...messages.map((message) => ({
       role: message.role,
-      content: message.content,
+      content: toChatCompletionContent(message.content, message.attachments),
     })),
     {
       role: 'user' as const,
-      content: input,
+      content: toChatCompletionContent(input, attachments),
     },
   ];
 }
 
-function buildChatCompletionPayload(context: ChatTurnContext, input: string, now: string, stream: boolean) {
+function buildChatCompletionPayload(context: ChatTurnContext, request: ChatRequest, now: string, stream: boolean) {
   const history =
-    context.transcript && context.sessionId
+    context.transcript && context.sessionId && !context.useSessionContinuationHeader
       ? mapTranscriptToChatMessages(context.transcript, context.sessionId, now)
       : [];
 
   return {
-    model: 'hermes-agent',
-    messages: toChatCompletionMessages(history, input),
+    model: context.model,
+    messages: toChatCompletionMessages(history, request.input, request.attachments, context.systemPrompt),
     stream,
   };
 }
 
-function buildResponsesPayload(request: ChatRequest, stream: boolean): JsonRecord {
+function buildResponsesPayload(context: ChatTurnContext, request: ChatRequest, stream: boolean): JsonRecord {
   const payload: JsonRecord = {
-    model: 'hermes-agent',
-    input: request.input,
+    model: context.model,
+    input: buildResponsesInput(request),
     stream,
     store: true,
   };
+
+  if (context.systemPrompt) {
+    payload.instructions = context.systemPrompt;
+  }
 
   if (request.responseId) {
     payload.previous_response_id = request.responseId;
@@ -213,10 +448,27 @@ function buildResponsesPayload(request: ChatRequest, stream: boolean): JsonRecor
 
 function buildRequestPayload(mode: ChatMode, context: ChatTurnContext, request: ChatRequest, now: string, stream: boolean) {
   if (mode === 'chat-completions') {
-    return buildChatCompletionPayload(context, request.input, now, stream);
+    return buildChatCompletionPayload(context, request, now, stream);
   }
 
-  return buildResponsesPayload(request, stream);
+  return buildResponsesPayload(context, request, stream);
+}
+
+function buildHermesRequestHeaders(context: ChatTurnContext): HeadersInit {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  const apiKey = process.env.HERMES_API_KEY || process.env.API_SERVER_KEY || process.env.BUBBLE_TOWN_HERMES_API_KEY;
+
+  if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  if (context.useSessionContinuationHeader && context.sessionId) {
+    headers['X-Hermes-Session-Id'] = context.sessionId;
+  }
+
+  return headers;
 }
 
 function readTranscript(profileId: string, cacheKey: string): SessionTranscript | undefined {
@@ -252,6 +504,7 @@ function buildTranscriptFromDetail(sessionId: string, profileId: string): Sessio
       role: message.role,
       content: message.content,
       created_at: message.createdAt,
+      attachments: message.attachments,
       tool_events: message.toolEvents,
     })),
   };
@@ -280,13 +533,18 @@ function deleteTranscript(profileId: string, cacheKey?: string): void {
 
 function createChatTurnContext(request: ChatRequest, mode: ChatMode): ChatTurnContext {
   const profileId = request.profileId || DEFAULT_PROFILE_ID;
+  const runtime = resolveProfileRuntime(profileId);
+  const managedGatewayProfile = isManagedHermesGatewayProfile(profileId);
   const sessionId = resolveRequestSessionId(request);
   const transcriptKey = sessionId;
   const now = new Date().toISOString();
+  const useSessionContinuationHeader = mode === 'chat-completions' && Boolean(sessionId);
   const transcript =
     transcriptKey
       ? (mode === 'chat-completions'
-          ? ensureTranscriptExists(profileId, transcriptKey, loadTranscript(profileId, transcriptKey), now)
+          ? (managedGatewayProfile
+              ? loadTranscript(profileId, transcriptKey)
+              : ensureTranscriptExists(profileId, transcriptKey, loadTranscript(profileId, transcriptKey), now, runtime))
           : undefined)
       : undefined;
 
@@ -296,6 +554,9 @@ function createChatTurnContext(request: ChatRequest, mode: ChatMode): ChatTurnCo
     responseId: request.responseId,
     transcriptKey,
     transcript,
+    model: runtime.model,
+    systemPrompt: runtime.systemPrompt,
+    useSessionContinuationHeader,
   };
 }
 
@@ -351,9 +612,10 @@ function persistConversationTurn(
     return {};
   }
 
-  if (options.mode === 'responses') {
+  if (isManagedHermesGatewayProfile(context.profileId)) {
     context.sessionId = canonicalSessionId;
     context.responseId = options.responseId ?? context.responseId;
+    context.transcriptKey = canonicalSessionId;
     return {
       sessionId: canonicalSessionId,
     };
@@ -367,7 +629,7 @@ function persistConversationTurn(
   const messagePrefix = transcript.session_id ?? canonicalSessionId;
   const nextMessages = [
     ...(transcript.messages ?? []),
-    createTranscriptMessage(`${messagePrefix}-user-${Date.now()}`, 'user', request.input, now),
+    createTranscriptMessage(`${messagePrefix}-user-${Date.now()}`, 'user', request.input, now, undefined, request.attachments),
   ];
 
   if (output.trim() || toolEvents.length) {
@@ -378,9 +640,10 @@ function persistConversationTurn(
 
   transcript.session_id = canonicalSessionId;
   transcript.response_id = options.responseId ?? transcript.response_id;
-  transcript.model = model || transcript.model || 'hermes-agent';
+  transcript.model = model || context.model || transcript.model || 'hermes-agent';
   transcript.base_url = getHermesApiBaseUrl();
-  transcript.platform = transcript.platform ?? 'api-server';
+  transcript.platform = transcript.platform ?? (options.mode === 'responses' ? 'api-server-responses' : 'api-server');
+  transcript.system_prompt = context.systemPrompt ?? transcript.system_prompt;
   transcript.session_start = transcript.session_start ?? now;
   transcript.last_updated = now;
   transcript.messages = nextMessages;
@@ -768,15 +1031,13 @@ export async function streamChat(
   handlers: StreamChatHandlers = {},
   options: StreamChatOptions = {},
 ): Promise<ChatResponse> {
-  const mode = getChatMode(request.mode);
+  const mode = resolveEffectiveChatMode(request, getChatMode(request.mode));
   const context = createChatTurnContext(request, mode);
   const now = new Date().toISOString();
   const payload = buildRequestPayload(mode, context, request, now, true);
   const response = await fetch(`${getHermesApiBaseUrl()}${getRequestPath(mode)}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: buildHermesRequestHeaders(context),
     body: JSON.stringify(payload),
     signal: options.signal,
   });
@@ -926,16 +1187,14 @@ export async function streamChat(
 }
 
 export async function sendChat(request: ChatRequest): Promise<ChatResponse> {
-  const mode = getChatMode(request.mode);
+  const mode = resolveEffectiveChatMode(request, getChatMode(request.mode));
   const context = createChatTurnContext(request, mode);
   const now = new Date().toISOString();
   const payload = buildRequestPayload(mode, context, request, now, false);
 
   const response = await fetch(`${getHermesApiBaseUrl()}${getRequestPath(mode)}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+    headers: buildHermesRequestHeaders(context),
     body: JSON.stringify(payload),
   });
 

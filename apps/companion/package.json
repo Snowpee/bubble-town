@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:lan": "COMPANION_HOST=0.0.0.0 tsx watch src/server.ts",
     "check": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
     "test": "tsx --test src/**/*.test.ts"
@@ -12,7 +13,8 @@
   "dependencies": {
     "@bubble-town/shared": "file:../../packages/shared",
     "@fastify/cors": "^10.0.2",
-    "fastify": "^5.3.3"
+    "fastify": "^5.3.3",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",

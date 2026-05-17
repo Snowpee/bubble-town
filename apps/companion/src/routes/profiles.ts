@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { handleCreateProfile, handleDeleteProfile, getProfilesResponse, handleRenameProfile, handleSwitchProfile } from '../services/profile-service.js';
+import { restartManagedHermesGateway } from '../services/hermes-gateway.js';
 
 export async function registerProfileRoutes(app: FastifyInstance) {
   app.get('/api/profiles', async () => getProfilesResponse());
@@ -44,6 +45,7 @@ export async function registerProfileRoutes(app: FastifyInstance) {
     let result;
 
     try {
+      await restartManagedHermesGateway(body.profileId);
       result = handleSwitchProfile({ profileId: body.profileId });
     } catch (error) {
       reply.code(400);

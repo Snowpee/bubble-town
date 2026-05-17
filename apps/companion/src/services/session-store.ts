@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import type { ChatMessage, SessionDetail, SessionSummary } from '@bubble-town/shared';
-import { DEFAULT_PROFILE_ID, getProfilesRoot, getResponseStoreDbPath, getSessionFilePath, getSessionsDir, getStateDbPath } from './hermes-paths.js';
+import type { ChatImageAttachment, ChatMessage, SessionDetail, SessionSummary } from '@bubble-town/shared';
+import { DEFAULT_PROFILE_ID, getResponseStoreDbPath, getSessionFilePath, getSessionsDir, getStateDbPath } from './hermes-paths.js';
 
 interface TranscriptMessage {
   id?: string;
@@ -9,6 +9,7 @@ interface TranscriptMessage {
   content?: unknown;
   timestamp?: number | string;
   created_at?: string;
+  attachments?: ChatImageAttachment[];
   tool_events?: ChatMessage['toolEvents'];
 }
 
@@ -59,6 +60,11 @@ interface StoredResponseRow {
   accessed_at: number;
 }
 
+interface MessageParts {
+  text: string;
+  attachments: ChatImageAttachment[];
+}
+
 function toIso(value?: number | string | null): string {
   if (value === null || value === undefined || value === '') {
     return new Date(0).toISOString();
@@ -84,17 +90,108 @@ function normalizeRole(role?: string): ChatMessage['role'] {
   return 'assistant';
 }
 
-function normalizeContent(content: unknown): string {
+function normalizeImageAttachments(value: unknown): ChatImageAttachment[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') {
+      return [];
+    }
+
+    const attachment = item as Partial<ChatImageAttachment>;
+    if (attachment.type !== 'image' || typeof attachment.url !== 'string' || !attachment.url.trim()) {
+      return [];
+    }
+
+    return [
+      {
+        type: 'image' as const,
+        url: attachment.url,
+        mimeType: typeof attachment.mimeType === 'string' ? attachment.mimeType : undefined,
+        name: typeof attachment.name === 'string' ? attachment.name : undefined,
+      },
+    ];
+  });
+}
+
+function dedupeAttachments(attachments: ChatImageAttachment[]): ChatImageAttachment[] {
+  const seen = new Set<string>();
+  return attachments.filter((attachment) => {
+    const identity = `${attachment.url}|${attachment.name ?? ''}`;
+    if (seen.has(identity)) {
+      return false;
+    }
+    seen.add(identity);
+    return true;
+  });
+}
+
+function extractMessageParts(content: unknown, fallbackAttachments?: unknown): MessageParts {
+  const attachments = [...normalizeImageAttachments(fallbackAttachments)];
+
   if (typeof content === 'string') {
-    return content;
+    return { text: content, attachments: dedupeAttachments(attachments) };
   }
 
   if (Array.isArray(content)) {
-    return content.map((item) => normalizeContent(item)).filter(Boolean).join('\n');
+    const textSegments: string[] = [];
+
+    for (const item of content) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+
+      const record = item as Record<string, unknown>;
+      const type = typeof record.type === 'string' ? record.type : undefined;
+
+      if ((type === 'text' || type === 'input_text' || type === 'output_text') && typeof record.text === 'string') {
+        textSegments.push(record.text);
+        continue;
+      }
+
+      if (type === 'image_url') {
+        const imagePayload =
+          record.image_url && typeof record.image_url === 'object' ? (record.image_url as Record<string, unknown>) : undefined;
+        const url = typeof imagePayload?.url === 'string' ? imagePayload.url : undefined;
+        if (url) {
+          attachments.push({ type: 'image', url });
+        }
+        continue;
+      }
+
+      if (type === 'input_image' && typeof record.image_url === 'string') {
+        attachments.push({ type: 'image', url: record.image_url });
+        continue;
+      }
+
+      if ('content' in record) {
+        const nested = extractMessageParts(record.content, record.attachments);
+        if (nested.text) {
+          textSegments.push(nested.text);
+        }
+        attachments.push(...nested.attachments);
+        continue;
+      }
+    }
+
+    return {
+      text: textSegments.filter(Boolean).join('\n'),
+      attachments: dedupeAttachments(attachments),
+    };
   }
 
-  if (content && typeof content === 'object') {
-    return JSON.stringify(content);
+  return { text: '', attachments: dedupeAttachments(attachments) };
+}
+
+function describeMessagePreview(parts: MessageParts): string {
+  if (parts.text.trim()) {
+    return parts.text;
+  }
+
+  if (parts.attachments.length > 0) {
+    return parts.attachments.length === 1 ? '[图片]' : `[${parts.attachments.length} 张图片]`;
   }
 
   return '';
@@ -335,8 +432,14 @@ function deriveSessionTitle(record: StoredSessionRecord): string {
     return dbTitle.trim();
   }
 
-  const fallback = transcript?.messages?.find((message) => (message.role === 'user' || message.role === 'assistant') && normalizeContent(message.content).trim());
-  const preview = fallback ? summarizeText(normalizeContent(fallback.content), 40) : '';
+  const fallback = transcript?.messages?.find((message) => {
+    if (message.role !== 'user' && message.role !== 'assistant') {
+      return false;
+    }
+
+    return describeMessagePreview(extractMessageParts(message.content, message.attachments)).trim().length > 0;
+  });
+  const preview = fallback ? summarizeText(describeMessagePreview(extractMessageParts(fallback.content, fallback.attachments)), 40) : '';
   return preview || sessionId;
 }
 
@@ -347,14 +450,18 @@ function mapTranscriptMessages(record: StoredSessionRecord): ChatMessage[] {
   const messageSeed = getTranscriptMessageSeed(record);
 
   return messages
-    .map((message, index) => ({
-      id: message.id ?? `${messageSeed}-${index + 1}`,
-      role: normalizeRole(message.role),
-      content: normalizeContent(message.content),
-      createdAt: typeof message.created_at === 'string' ? message.created_at : toIso(message.timestamp ?? defaultTimestamp),
-      toolEvents: Array.isArray(message.tool_events) ? message.tool_events : undefined,
-    }))
-    .filter((message) => message.content.trim().length > 0 || (message.toolEvents?.length ?? 0) > 0);
+    .map((message, index) => {
+      const parts = extractMessageParts(message.content, message.attachments);
+      return {
+        id: message.id ?? `${messageSeed}-${index + 1}`,
+        role: normalizeRole(message.role),
+        content: parts.text,
+        attachments: parts.attachments.length ? parts.attachments : undefined,
+        createdAt: typeof message.created_at === 'string' ? message.created_at : toIso(message.timestamp ?? defaultTimestamp),
+        toolEvents: Array.isArray(message.tool_events) ? message.tool_events : undefined,
+      };
+    })
+    .filter((message) => message.content.trim().length > 0 || (message.attachments?.length ?? 0) > 0 || (message.toolEvents?.length ?? 0) > 0);
 }
 
 function mapDbMessages(sessionId: string, rows: MessageRow[]): ChatMessage[] {
@@ -377,8 +484,17 @@ function buildSessionSummary(record: StoredSessionRecord): SessionSummary {
   const visibleTranscriptMessages = getVisibleMessages(transcriptMessages);
   const dbSessionKey = getDbSessionKey(record);
   const lastPreview =
-    [...visibleTranscriptMessages].reverse().find((message) => message.role === 'user' || message.role === 'assistant')?.content ??
     (dbSessionKey ? getDbSessionPreview(record.profileId, dbSessionKey) : undefined) ??
+    (() => {
+      const lastVisible = [...visibleTranscriptMessages].reverse().find((message) => message.role === 'user' || message.role === 'assistant');
+      if (!lastVisible) {
+        return undefined;
+      }
+      return describeMessagePreview({
+        text: lastVisible.content,
+        attachments: lastVisible.attachments ?? [],
+      });
+    })() ??
     '';
 
   return {
@@ -388,12 +504,14 @@ function buildSessionSummary(record: StoredSessionRecord): SessionSummary {
     responseId: getTranscriptResponseId(record.transcript) ?? getLatestResponseIdForSession(record.sessionId, record.profileId),
     profileId: record.profileId,
     title: deriveSessionTitle(record),
-    source: record.transcript?.platform ?? record.dbRow?.source ?? 'unknown',
-    startedAt: record.transcript?.session_start ?? (record.dbRow ? toIso(record.dbRow.started_at) : new Date().toISOString()),
+    source: record.dbRow?.source ?? record.transcript?.platform ?? 'unknown',
+    startedAt: record.dbRow ? toIso(record.dbRow.started_at) : record.transcript?.session_start ?? new Date().toISOString(),
     updatedAt:
+      (record.dbRow ? toIso(record.dbRow.ended_at ?? record.dbRow.started_at) : undefined) ??
       record.transcript?.last_updated ??
-      (record.dbRow ? toIso(record.dbRow.ended_at ?? record.dbRow.started_at) : record.transcript?.session_start ?? new Date().toISOString()),
-    messageCount: record.transcript ? visibleTranscriptMessages.length : record.dbRow?.message_count ?? 0,
+      record.transcript?.session_start ??
+      new Date().toISOString(),
+    messageCount: record.dbRow?.message_count ?? (record.transcript ? visibleTranscriptMessages.length : 0),
     lastMessagePreview: lastPreview ? summarizeText(lastPreview) : undefined,
   };
 }
@@ -481,27 +599,14 @@ function findNativeSessionRecord(profileId: string, sessionId: string): StoredSe
   return buildSessionRecords(profileId).find((record) => record.sessionId === target);
 }
 
-function candidateProfiles(): string[] {
-  const profilesRoot = getProfilesRoot();
-  const namedProfiles = fs.existsSync(profilesRoot)
-    ? fs
-        .readdirSync(profilesRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => entry.name)
-    : [];
-
-  return [DEFAULT_PROFILE_ID, ...namedProfiles];
-}
-
 export function listSessions(profileId = DEFAULT_PROFILE_ID): SessionSummary[] {
   return buildSessionRecords(profileId)
-    .filter((record) => Boolean(record.transcript))
     .map((record) => buildSessionSummary(record))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
 export function getSessionSummary(sessionId: string, profileId?: string): SessionSummary | undefined {
-  const profiles = profileId ? [profileId] : candidateProfiles();
+  const profiles = [profileId || DEFAULT_PROFILE_ID];
 
   for (const currentProfileId of profiles) {
     const record = findNativeSessionRecord(currentProfileId, sessionId);
@@ -516,7 +621,7 @@ export function getSessionSummary(sessionId: string, profileId?: string): Sessio
 }
 
 export function getSessionDetail(sessionIdOrAlias: string, profileId?: string): SessionDetail | undefined {
-  const profiles = profileId ? [profileId] : candidateProfiles();
+  const profiles = [profileId || DEFAULT_PROFILE_ID];
 
   for (const currentProfileId of profiles) {
     const record = findSessionRecord(currentProfileId, sessionIdOrAlias);
@@ -526,9 +631,9 @@ export function getSessionDetail(sessionIdOrAlias: string, profileId?: string): 
 
     const summary = buildSessionSummary(record);
     const dbSessionKey = getDbSessionKey(record);
-    const messages = record.transcript
-      ? mapTranscriptMessages(record)
-      : mapDbMessages(record.sessionId, dbSessionKey ? queryMessageRows(currentProfileId, dbSessionKey) : []);
+    const messages = dbSessionKey
+      ? mapDbMessages(record.sessionId, queryMessageRows(currentProfileId, dbSessionKey))
+      : mapTranscriptMessages(record);
 
     return {
       summary,
@@ -540,11 +645,11 @@ export function getSessionDetail(sessionIdOrAlias: string, profileId?: string): 
 }
 
 export function deleteSession(sessionIdOrAlias: string, profileId?: string): boolean {
-  const profiles = profileId ? [profileId] : candidateProfiles();
+  const profiles = [profileId || DEFAULT_PROFILE_ID];
 
   for (const currentProfileId of profiles) {
     const record = findSessionRecord(currentProfileId, sessionIdOrAlias);
-    if (!record?.transcript) {
+    if (!record) {
       continue;
     }
 

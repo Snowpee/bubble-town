@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { sendChat, streamChat } from '../services/hermes-api.js';
+import { ensureManagedHermesGateway } from '../services/hermes-gateway.js';
 import type {
+  ChatImageAttachment,
   ChatStreamCompleteEvent,
   ChatStreamDeltaEvent,
   ChatStreamErrorEvent,
@@ -33,8 +35,10 @@ export async function registerChatRoutes(app: FastifyInstance) {
       conversation?: string;
       responseId?: string;
       input: string;
+      attachments?: ChatImageAttachment[];
       mode?: 'responses' | 'chat-completions';
     };
+    await ensureManagedHermesGateway(body.profileId);
     return sendChat(body);
   });
 
@@ -45,6 +49,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
       conversation?: string;
       responseId?: string;
       input: string;
+      attachments?: ChatImageAttachment[];
       mode?: 'responses' | 'chat-completions';
     };
     const origin = typeof request.headers.origin === 'string' ? request.headers.origin : '*';
@@ -68,6 +73,7 @@ export async function registerChatRoutes(app: FastifyInstance) {
     });
 
     try {
+      await ensureManagedHermesGateway(body.profileId);
       await streamChat(body, {
         onStart: (event: ChatStreamStartEvent) => writeSseEvent(reply, 'message-start', event),
         onDelta: (delta: string) => writeSseEvent(reply, 'message-delta', { delta } satisfies ChatStreamDeltaEvent),

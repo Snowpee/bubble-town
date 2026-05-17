@@ -1,5 +1,12 @@
 export type ChatMode = 'responses' | 'chat-completions';
 
+export interface ChatImageAttachment {
+  type: 'image';
+  url: string;
+  mimeType?: string;
+  name?: string;
+}
+
 export interface ChatRequest {
   profileId?: string;
   /**
@@ -16,6 +23,7 @@ export interface ChatRequest {
    */
   responseId?: string;
   input: string;
+  attachments?: ChatImageAttachment[];
   mode?: ChatMode;
 }
 

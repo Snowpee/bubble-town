@@ -1,3 +1,5 @@
+import type { ChatImageAttachment } from './chat.js';
+
 export interface SessionSummary {
   /**
    * Hermes native session identity shared by list/detail APIs and route params.
@@ -37,6 +39,7 @@ export interface ChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   createdAt: string;
+  attachments?: ChatImageAttachment[];
   toolEvents?: ToolProgressEvent[];
 }
 
