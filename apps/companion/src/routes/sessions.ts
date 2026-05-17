@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { deleteSession, getSessionDetail, getSessionSummary, listSessions } from '../services/session-store.js';
+import { deleteSession, findSessionProfiles, getSessionDetail, getSessionSummary, listSessions } from '../services/session-store.js';
 
 export async function registerSessionRoutes(app: FastifyInstance) {
   app.get('/api/sessions', async (request) => {
@@ -13,6 +13,11 @@ export async function registerSessionRoutes(app: FastifyInstance) {
     const summary = getSessionSummary(params.id, query.profileId);
 
     if (!summary) {
+      request.log.warn({
+        requestedProfileId: query.profileId,
+        sessionId: params.id,
+        matchingProfiles: findSessionProfiles(params.id),
+      }, 'session summary not found in requested profile');
       reply.code(404);
       return { message: '未找到目标会话。' };
     }
@@ -26,6 +31,11 @@ export async function registerSessionRoutes(app: FastifyInstance) {
     const detail = getSessionDetail(params.id, query.profileId);
 
     if (!detail) {
+      request.log.warn({
+        requestedProfileId: query.profileId,
+        sessionId: params.id,
+        matchingProfiles: findSessionProfiles(params.id),
+      }, 'session detail not found in requested profile');
       reply.code(404);
       return { message: '未找到目标会话。' };
     }

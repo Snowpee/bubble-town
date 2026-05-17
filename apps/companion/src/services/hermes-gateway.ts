@@ -17,6 +17,21 @@ interface ManagedHermesGatewaySnapshot {
   port?: number;
   pid?: number;
   logs: string[];
+  gateways?: ManagedHermesGatewayInstanceSnapshot[];
+}
+
+interface ManagedHermesGatewayInstanceSnapshot {
+  expectedProfileId: string;
+  actualProfileId: string;
+  running: boolean;
+  apiBaseUrl?: string;
+  healthUrl?: string;
+  port?: number;
+  pid?: number;
+  ppid: number;
+  expectedHermesHome: string;
+  actualHermesHome: string;
+  logs: string[];
 }
 
 interface LaunchGatewayOptions {
@@ -46,19 +61,33 @@ function getManagedGatewayApiKey(): string {
   return process.env.BUBBLE_TOWN_HERMES_API_KEY || generatedGatewayApiKey;
 }
 
-let gatewaySpawner: GatewaySpawner = ({ profileId, port }) => {
+function buildGatewayEnv(profileId: string, port: number): NodeJS.ProcessEnv {
+  const {
+    BUBBLE_TOWN_HERMES_PROFILE_ID: _inheritedProfileId,
+    HERMES_API_BASE_URL: _inheritedApiBaseUrl,
+    HERMES_HOME: _inheritedHermesHome,
+    API_SERVER_PORT: _inheritedApiServerPort,
+    API_SERVER_HOST: _inheritedApiServerHost,
+    API_SERVER_KEY: _inheritedApiServerKey,
+    ...baseEnv
+  } = process.env;
   const profileHome = getProfileHome(profileId);
   const apiKey = getManagedGatewayApiKey();
+
+  return {
+    ...baseEnv,
+    HERMES_HOME: profileHome,
+    API_SERVER_ENABLED: 'true',
+    API_SERVER_HOST: defaultGatewayHost,
+    API_SERVER_PORT: String(port),
+    API_SERVER_KEY: apiKey,
+    BUBBLE_TOWN_HERMES_API_KEY: apiKey,
+  };
+}
+
+let gatewaySpawner: GatewaySpawner = ({ profileId, port }) => {
   const child = spawn(process.env.HERMES_BINARY ?? 'hermes', ['gateway', 'run', '--replace', '--accept-hooks'], {
-    env: {
-      ...process.env,
-      HERMES_HOME: profileHome,
-      API_SERVER_ENABLED: 'true',
-      API_SERVER_HOST: defaultGatewayHost,
-      API_SERVER_PORT: String(port),
-      API_SERVER_KEY: apiKey,
-      BUBBLE_TOWN_HERMES_API_KEY: apiKey,
-    },
+    env: buildGatewayEnv(profileId, port),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
@@ -80,14 +109,19 @@ let gatewayHealthChecker: GatewayHealthChecker = async (healthUrl) => {
 };
 
 const managedGatewayState: {
-  child?: HermesGatewayChildProcess;
-  profileId?: string;
-  apiBaseUrl?: string;
-  healthUrl?: string;
-  port?: number;
-  logs: string[];
+  gateways: Map<string, {
+    child: HermesGatewayChildProcess;
+    profileId: string;
+    actualProfileId: string;
+    apiBaseUrl: string;
+    healthUrl: string;
+    port: number;
+    expectedHermesHome: string;
+    actualHermesHome: string;
+    logs: string[];
+  }>;
 } = {
-  logs: [],
+  gateways: new Map(),
 };
 
 let transitionQueue = Promise.resolve();
@@ -96,36 +130,38 @@ function getProfileHomeForGateway(profileId = DEFAULT_PROFILE_ID): string {
   return getProfileHome(profileId);
 }
 
-function appendGatewayLog(prefix: string, chunk: string): void {
+function appendGatewayLog(profileId: string, prefix: string, chunk: string): void {
+  const gateway = managedGatewayState.gateways.get(profileId);
+  if (!gateway) {
+    return;
+  }
+
   const lines = chunk
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 
   for (const line of lines) {
-    managedGatewayState.logs.push(`${prefix}${line}`);
+    gateway.logs.push(`${prefix}${line}`);
   }
 
-  if (managedGatewayState.logs.length > maxLogLines) {
-    managedGatewayState.logs.splice(0, managedGatewayState.logs.length - maxLogLines);
+  if (gateway.logs.length > maxLogLines) {
+    gateway.logs.splice(0, gateway.logs.length - maxLogLines);
   }
 }
 
-function attachGatewayLogs(child: HermesGatewayChildProcess): void {
+function attachGatewayLogs(profileId: string, child: HermesGatewayChildProcess): void {
   child.stdout.setEncoding('utf8');
   child.stderr.setEncoding('utf8');
-  child.stdout.on('data', (chunk: string) => appendGatewayLog('[stdout] ', chunk));
-  child.stderr.on('data', (chunk: string) => appendGatewayLog('[stderr] ', chunk));
+  child.stdout.on('data', (chunk: string) => appendGatewayLog(profileId, '[stdout] ', chunk));
+  child.stderr.on('data', (chunk: string) => appendGatewayLog(profileId, '[stderr] ', chunk));
 }
 
-function trackGatewayExit(child: HermesGatewayChildProcess): Promise<number | null> {
+function trackGatewayExit(profileId: string, child: HermesGatewayChildProcess): Promise<number | null> {
   return new Promise((resolve) => {
     child.once('exit', (code) => {
-      if (managedGatewayState.child === child) {
-        managedGatewayState.child = undefined;
-        managedGatewayState.apiBaseUrl = undefined;
-        managedGatewayState.healthUrl = undefined;
-        managedGatewayState.port = undefined;
+      if (managedGatewayState.gateways.get(profileId)?.child === child) {
+        managedGatewayState.gateways.delete(profileId);
       }
       resolve(code);
     });
@@ -133,7 +169,7 @@ function trackGatewayExit(child: HermesGatewayChildProcess): Promise<number | nu
 }
 
 function buildGatewayFailureMessage(profileId: string, reason: string): string {
-  const details = managedGatewayState.logs.slice(-10).join('\n');
+  const details = managedGatewayState.gateways.get(profileId)?.logs.slice(-10).join('\n') ?? '';
   return details
     ? `Bubble Town 专用 Hermes 网关切到 profile "${profileId}" 失败：${reason}\n${details}`
     : `Bubble Town 专用 Hermes 网关切到 profile "${profileId}" 失败：${reason}`;
@@ -193,7 +229,8 @@ async function stopGatewayProcess(child: HermesGatewayChildProcess): Promise<voi
     return;
   }
 
-  const exited = trackGatewayExit(child);
+  const profileId = [...managedGatewayState.gateways.values()].find((gateway) => gateway.child === child)?.profileId;
+  const exited = profileId ? trackGatewayExit(profileId, child) : new Promise<number | null>((resolve) => child.once('exit', resolve));
   child.kill('SIGTERM');
 
   const timeout = sleep(gatewayStopTimeoutMs).then(() => 'timeout' as const);
@@ -211,17 +248,21 @@ async function launchGateway(profileId: string): Promise<ManagedHermesGatewaySna
     throw new Error(`目标 profile 不存在：${profileId}`);
   }
 
-  managedGatewayState.logs = [];
   const port = await reservePort(defaultGatewayPort);
   const launched = gatewaySpawner({ profileId, port });
-  attachGatewayLogs(launched.child);
-  const exitPromise = trackGatewayExit(launched.child);
-
-  managedGatewayState.child = launched.child;
-  managedGatewayState.profileId = profileId;
-  managedGatewayState.apiBaseUrl = launched.apiBaseUrl;
-  managedGatewayState.healthUrl = launched.healthUrl;
-  managedGatewayState.port = launched.port;
+  managedGatewayState.gateways.set(profileId, {
+    child: launched.child,
+    profileId,
+    actualProfileId: profileId,
+    apiBaseUrl: launched.apiBaseUrl,
+    healthUrl: launched.healthUrl,
+    port: launched.port,
+    expectedHermesHome: profileHome,
+    actualHermesHome: profileHome,
+    logs: [],
+  });
+  attachGatewayLogs(profileId, launched.child);
+  const exitPromise = trackGatewayExit(profileId, launched.child);
 
   try {
     await waitForGatewayReady(profileId, launched.child, launched.healthUrl);
@@ -231,11 +272,9 @@ async function launchGateway(profileId: string): Promise<ManagedHermesGatewaySna
     throw error;
   }
 
-  process.env.HERMES_API_BASE_URL = launched.apiBaseUrl;
-  process.env.BUBBLE_TOWN_HERMES_PROFILE_ID = profileId;
   process.env.BUBBLE_TOWN_HERMES_API_KEY = getManagedGatewayApiKey();
 
-  return getManagedHermesGatewaySnapshot();
+  return getManagedHermesGatewaySnapshot(profileId);
 }
 
 function serializeTransition<T>(task: () => Promise<T>): Promise<T> {
@@ -244,40 +283,58 @@ function serializeTransition<T>(task: () => Promise<T>): Promise<T> {
   return next;
 }
 
-export function getManagedHermesGatewaySnapshot(): ManagedHermesGatewaySnapshot {
+function snapshotGateway(gateway: NonNullable<ReturnType<typeof managedGatewayState.gateways.get>>): ManagedHermesGatewayInstanceSnapshot {
   return {
-    managed: true,
-    running: Boolean(managedGatewayState.child && managedGatewayState.apiBaseUrl),
-    profileId: managedGatewayState.profileId,
-    apiBaseUrl: managedGatewayState.apiBaseUrl,
-    healthUrl: managedGatewayState.healthUrl,
-    port: managedGatewayState.port,
-    pid: managedGatewayState.child?.pid,
-    logs: [...managedGatewayState.logs],
+    expectedProfileId: gateway.profileId,
+    actualProfileId: gateway.actualProfileId,
+    running: Boolean(gateway.child && gateway.apiBaseUrl),
+    apiBaseUrl: gateway.apiBaseUrl,
+    healthUrl: gateway.healthUrl,
+    port: gateway.port,
+    pid: gateway.child.pid,
+    ppid: process.pid,
+    expectedHermesHome: gateway.expectedHermesHome,
+    actualHermesHome: gateway.actualHermesHome,
+    logs: [...gateway.logs],
   };
 }
 
-export async function isManagedHermesGatewayReachable(): Promise<boolean> {
-  if (!managedGatewayState.healthUrl) {
+export function getManagedHermesGatewaySnapshot(profileId = DEFAULT_PROFILE_ID): ManagedHermesGatewaySnapshot {
+  const gateway = managedGatewayState.gateways.get(profileId);
+  return {
+    managed: true,
+    running: Boolean(gateway?.child && gateway.apiBaseUrl),
+    profileId: gateway?.profileId,
+    apiBaseUrl: gateway?.apiBaseUrl,
+    healthUrl: gateway?.healthUrl,
+    port: gateway?.port,
+    pid: gateway?.child.pid,
+    logs: gateway ? [...gateway.logs] : [],
+    gateways: [...managedGatewayState.gateways.values()].map((entry) => snapshotGateway(entry)),
+  };
+}
+
+export async function isManagedHermesGatewayReachable(profileId = DEFAULT_PROFILE_ID): Promise<boolean> {
+  const gateway = managedGatewayState.gateways.get(profileId);
+  if (!gateway?.healthUrl) {
     return false;
   }
 
-  return gatewayHealthChecker(managedGatewayState.healthUrl);
+  return gatewayHealthChecker(gateway.healthUrl);
 }
 
 export async function ensureManagedHermesGateway(profileId = DEFAULT_PROFILE_ID): Promise<ManagedHermesGatewaySnapshot> {
   return serializeTransition(async () => {
-    const current = getManagedHermesGatewaySnapshot();
+    const current = getManagedHermesGatewaySnapshot(profileId);
     const hasManagedApiKey = Boolean(process.env.BUBBLE_TOWN_HERMES_API_KEY);
     if (hasManagedApiKey && current.running && current.profileId === profileId && current.healthUrl && (await gatewayHealthChecker(current.healthUrl))) {
-      process.env.HERMES_API_BASE_URL = current.apiBaseUrl;
-      process.env.BUBBLE_TOWN_HERMES_PROFILE_ID = profileId;
       process.env.BUBBLE_TOWN_HERMES_API_KEY = getManagedGatewayApiKey();
       return current;
     }
 
-    if (managedGatewayState.child) {
-      await stopGatewayProcess(managedGatewayState.child);
+    const existing = managedGatewayState.gateways.get(profileId);
+    if (existing) {
+      await stopGatewayProcess(existing.child);
     }
 
     return launchGateway(profileId);
@@ -286,8 +343,9 @@ export async function ensureManagedHermesGateway(profileId = DEFAULT_PROFILE_ID)
 
 export async function restartManagedHermesGateway(profileId = DEFAULT_PROFILE_ID): Promise<ManagedHermesGatewaySnapshot> {
   return serializeTransition(async () => {
-    if (managedGatewayState.child) {
-      await stopGatewayProcess(managedGatewayState.child);
+    const existing = managedGatewayState.gateways.get(profileId);
+    if (existing) {
+      await stopGatewayProcess(existing.child);
     }
 
     return launchGateway(profileId);
@@ -296,14 +354,12 @@ export async function restartManagedHermesGateway(profileId = DEFAULT_PROFILE_ID
 
 export async function stopManagedHermesGateway(): Promise<void> {
   return serializeTransition(async () => {
-    if (managedGatewayState.child) {
-      await stopGatewayProcess(managedGatewayState.child);
+    const gateways = [...managedGatewayState.gateways.values()];
+    for (const gateway of gateways) {
+      await stopGatewayProcess(gateway.child);
     }
 
-    managedGatewayState.child = undefined;
-    managedGatewayState.apiBaseUrl = undefined;
-    managedGatewayState.healthUrl = undefined;
-    managedGatewayState.port = undefined;
+    managedGatewayState.gateways.clear();
     delete process.env.HERMES_API_BASE_URL;
     delete process.env.BUBBLE_TOWN_HERMES_PROFILE_ID;
     delete process.env.BUBBLE_TOWN_HERMES_API_KEY;
@@ -311,7 +367,7 @@ export async function stopManagedHermesGateway(): Promise<void> {
 }
 
 export function isManagedHermesGatewayProfile(profileId = DEFAULT_PROFILE_ID): boolean {
-  const snapshot = getManagedHermesGatewaySnapshot();
+  const snapshot = getManagedHermesGatewaySnapshot(profileId);
   return snapshot.running && snapshot.profileId === profileId;
 }
 
@@ -321,17 +377,8 @@ export function setHermesGatewaySpawnerForTests(spawner: GatewaySpawner): void {
 
 export function resetHermesGatewaySpawnerForTests(): void {
   gatewaySpawner = ({ profileId, port }) => {
-    const profileHome = getProfileHome(profileId);
     const child = spawn(process.env.HERMES_BINARY ?? 'hermes', ['gateway', 'run', '--replace', '--accept-hooks'], {
-      env: {
-        ...process.env,
-        HERMES_HOME: profileHome,
-        API_SERVER_ENABLED: 'true',
-        API_SERVER_HOST: defaultGatewayHost,
-        API_SERVER_PORT: String(port),
-        API_SERVER_KEY: getManagedGatewayApiKey(),
-        BUBBLE_TOWN_HERMES_API_KEY: getManagedGatewayApiKey(),
-      },
+      env: buildGatewayEnv(profileId, port),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -360,23 +407,25 @@ export function resetHermesGatewayHealthCheckerForTests(): void {
 }
 
 export function resetManagedHermesGatewayStateForTests(): void {
-  managedGatewayState.child = undefined;
-  managedGatewayState.profileId = undefined;
-  managedGatewayState.apiBaseUrl = undefined;
-  managedGatewayState.healthUrl = undefined;
-  managedGatewayState.port = undefined;
-  managedGatewayState.logs = [];
+  managedGatewayState.gateways.clear();
   delete process.env.HERMES_API_BASE_URL;
   delete process.env.BUBBLE_TOWN_HERMES_PROFILE_ID;
   delete process.env.BUBBLE_TOWN_HERMES_API_KEY;
 }
 
 export function setManagedHermesGatewayProfileForTests(profileId = DEFAULT_PROFILE_ID, apiBaseUrl = 'http://127.0.0.1:8643/v1'): void {
-  managedGatewayState.child = { pid: 1, exitCode: null, killed: false } as unknown as HermesGatewayChildProcess;
-  managedGatewayState.profileId = profileId;
-  managedGatewayState.apiBaseUrl = apiBaseUrl;
-  managedGatewayState.healthUrl = apiBaseUrl.replace(/\/v1$/, '/health');
-  managedGatewayState.port = Number(new URL(apiBaseUrl).port || 80);
+  const profileHome = getProfileHome(profileId);
+  managedGatewayState.gateways.set(profileId, {
+    child: { pid: 1, exitCode: null, killed: false } as unknown as HermesGatewayChildProcess,
+    profileId,
+    actualProfileId: profileId,
+    apiBaseUrl,
+    healthUrl: apiBaseUrl.replace(/\/v1$/, '/health'),
+    port: Number(new URL(apiBaseUrl).port || 80),
+    expectedHermesHome: profileHome,
+    actualHermesHome: profileHome,
+    logs: [],
+  });
   process.env.HERMES_API_BASE_URL = apiBaseUrl;
   process.env.BUBBLE_TOWN_HERMES_PROFILE_ID = profileId;
   process.env.BUBBLE_TOWN_HERMES_API_KEY = getManagedGatewayApiKey();

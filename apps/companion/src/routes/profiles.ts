@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { handleCreateProfile, handleDeleteProfile, getProfilesResponse, handleRenameProfile, handleSwitchProfile } from '../services/profile-service.js';
-import { restartManagedHermesGateway } from '../services/hermes-gateway.js';
+import { ensureManagedHermesGateway } from '../services/hermes-gateway.js';
 
 export async function registerProfileRoutes(app: FastifyInstance) {
   app.get('/api/profiles', async () => getProfilesResponse());
@@ -45,8 +45,25 @@ export async function registerProfileRoutes(app: FastifyInstance) {
     let result;
 
     try {
-      await restartManagedHermesGateway(body.profileId);
+      request.log.info({ requestedProfileId: body.profileId }, 'profile switch request');
+      const gateway = await ensureManagedHermesGateway(body.profileId);
+      const gatewayInstance = gateway.gateways?.find((entry) => entry.expectedProfileId === gateway.profileId);
+      request.log.info({
+        requestedProfileId: body.profileId,
+        gatewayExpectedProfileId: gatewayInstance?.expectedProfileId ?? gateway.profileId,
+        gatewayActualProfileId: gatewayInstance?.actualProfileId,
+        gatewayApiBaseUrl: gateway.apiBaseUrl,
+        gatewayPort: gateway.port,
+        gatewayPid: gateway.pid,
+        expectedHermesHome: gatewayInstance?.expectedHermesHome,
+        actualHermesHome: gatewayInstance?.actualHermesHome,
+      }, 'profile switch gateway ready');
       result = handleSwitchProfile({ profileId: body.profileId });
+      request.log.info({
+        requestedProfileId: body.profileId,
+        returnedActiveProfileId: result.activeProfile?.id,
+        returnedSessionProfiles: Array.from(new Set(result.sessions.map((session) => session.profileId))),
+      }, 'profile switch complete');
     } catch (error) {
       reply.code(400);
       return { message: error instanceof Error ? error.message : '切换 profile 失败。' };

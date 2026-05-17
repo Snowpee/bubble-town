@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import type { ChatImageAttachment, ChatMessage, SessionDetail, SessionSummary } from '@bubble-town/shared';
-import { DEFAULT_PROFILE_ID, getResponseStoreDbPath, getSessionFilePath, getSessionsDir, getStateDbPath } from './hermes-paths.js';
+import { DEFAULT_PROFILE_ID, getProfilesRoot, getResponseStoreDbPath, getSessionFilePath, getSessionsDir, getStateDbPath } from './hermes-paths.js';
 
 interface TranscriptMessage {
   id?: string;
@@ -603,6 +603,23 @@ export function listSessions(profileId = DEFAULT_PROFILE_ID): SessionSummary[] {
   return buildSessionRecords(profileId)
     .map((record) => buildSessionSummary(record))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export function findSessionProfiles(sessionIdOrAlias: string): string[] {
+  const target = normalizeIdentity(sessionIdOrAlias);
+  if (!target) {
+    return [];
+  }
+
+  const profilesRoot = getProfilesRoot();
+  const namedProfiles = fs.existsSync(profilesRoot)
+    ? fs
+        .readdirSync(profilesRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+    : [];
+
+  return [DEFAULT_PROFILE_ID, ...namedProfiles].filter((profileId) => Boolean(findSessionRecord(profileId, target)));
 }
 
 export function getSessionSummary(sessionId: string, profileId?: string): SessionSummary | undefined {

@@ -8,6 +8,7 @@ import { registerProfileRoutes } from './routes/profiles.js';
 import { registerSessionRoutes } from './routes/sessions.js';
 import { ensureManagedHermesGateway, stopManagedHermesGateway } from './services/hermes-gateway.js';
 import { getActiveProfileId } from './services/profile-store.js';
+import { acquireCompanionLock, releaseCompanionLock } from './services/companion-lock.js';
 
 const defaultPort = Number(process.env.COMPANION_PORT ?? 3030);
 const defaultHost = process.env.COMPANION_HOST ?? '127.0.0.1';
@@ -29,6 +30,7 @@ export async function createCompanionServer() {
 
   app.addHook('onClose', async () => {
     await stopManagedHermesGateway();
+    releaseCompanionLock();
   });
 
   app.get('/api/ping', async () => ({ ok: true }));
@@ -41,6 +43,7 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
   const port = options.port ?? defaultPort;
   const host = options.host ?? defaultHost;
 
+  acquireCompanionLock(port, host);
   await app.listen({ port, host });
   try {
     await ensureManagedHermesGateway(getActiveProfileId());

@@ -71,8 +71,13 @@ test('ensureManagedHermesGateway 会为目标 profile 启动 Bubble Town 专用 
     assert.equal(startedProfiles[0], 'sami');
     assert.equal(snapshot.running, true);
     assert.equal(snapshot.profileId, 'sami');
-    assert.equal(process.env.BUBBLE_TOWN_HERMES_PROFILE_ID, 'sami');
-    assert.match(process.env.HERMES_API_BASE_URL ?? '', /^http:\/\/127\.0\.0\.1:\d+\/v1$/);
+    assert.equal(snapshot.gateways?.length, 1);
+    assert.equal(snapshot.gateways?.[0]?.expectedProfileId, 'sami');
+    assert.equal(snapshot.gateways?.[0]?.actualProfileId, 'sami');
+    assert.equal(snapshot.gateways?.[0]?.expectedHermesHome, path.join(hermesHome, 'profiles', 'sami'));
+    assert.equal(snapshot.gateways?.[0]?.actualHermesHome, path.join(hermesHome, 'profiles', 'sami'));
+    assert.equal(process.env.BUBBLE_TOWN_HERMES_PROFILE_ID, undefined);
+    assert.equal(process.env.HERMES_API_BASE_URL, undefined);
     assert.ok(process.env.BUBBLE_TOWN_HERMES_API_KEY);
   } finally {
     await stopManagedHermesGateway();
@@ -83,7 +88,7 @@ test('ensureManagedHermesGateway 会为目标 profile 启动 Bubble Town 专用 
   }
 });
 
-test('restartManagedHermesGateway 切换 profile 时会停止之前的 Bubble Town 专用 Hermes 网关', async () => {
+test('不同 profile 的 Bubble Town 专用 Hermes 网关会并存', async () => {
   const hermesHome = createHermesHome();
   const spawnedChildren: FakeChildProcess[] = [];
 
@@ -101,13 +106,56 @@ test('restartManagedHermesGateway 切换 profile 时会停止之前的 Bubble To
 
   try {
     await ensureManagedHermesGateway('default');
-    await restartManagedHermesGateway('sami');
+    const samiSnapshot = await restartManagedHermesGateway('sami');
 
     assert.equal(spawnedChildren.length, 2);
+    assert.equal(spawnedChildren[0]?.killed, false);
+    assert.equal(spawnedChildren[1]?.killed, false);
+    assert.equal(samiSnapshot.profileId, 'sami');
+    assert.equal(samiSnapshot.running, true);
+
+    const defaultSnapshot = getManagedHermesGatewaySnapshot('default');
+    assert.equal(defaultSnapshot.profileId, 'default');
+    assert.equal(defaultSnapshot.running, true);
+    assert.equal(defaultSnapshot.gateways?.length, 2);
+    assert.deepEqual(new Set(defaultSnapshot.gateways?.map((gateway) => gateway.expectedProfileId)), new Set(['default', 'sami']));
+  } finally {
+    await stopManagedHermesGateway();
+    resetManagedHermesGatewayStateForTests();
+    resetHermesGatewaySpawnerForTests();
+    resetHermesGatewayHealthCheckerForTests();
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('restartManagedHermesGateway 只重启目标 profile 的 Bubble Town 专用 Hermes 网关', async () => {
+  const hermesHome = createHermesHome();
+  const spawnedChildren: FakeChildProcess[] = [];
+
+  setHermesGatewaySpawnerForTests(({ profileId: _profileId, port }) => {
+    const child = new FakeChildProcess();
+    spawnedChildren.push(child);
+    return {
+      child: child as unknown as HermesGatewayChildProcess,
+      apiBaseUrl: `http://127.0.0.1:${port}/v1`,
+      healthUrl: `http://127.0.0.1:${port}/health`,
+      port,
+    };
+  });
+  setHermesGatewayHealthCheckerForTests(async () => true);
+
+  try {
+    await ensureManagedHermesGateway('default');
+    await ensureManagedHermesGateway('sami');
+    const snapshot = await restartManagedHermesGateway('default');
+
+    assert.equal(spawnedChildren.length, 3);
     assert.equal(spawnedChildren[0]?.killed, true);
-    const snapshot = getManagedHermesGatewaySnapshot();
-    assert.equal(snapshot.profileId, 'sami');
+    assert.equal(spawnedChildren[1]?.killed, false);
+    assert.equal(spawnedChildren[2]?.killed, false);
+    assert.equal(snapshot.profileId, 'default');
     assert.equal(snapshot.running, true);
+    assert.equal(getManagedHermesGatewaySnapshot('sami').running, true);
   } finally {
     await stopManagedHermesGateway();
     resetManagedHermesGatewayStateForTests();

@@ -10,6 +10,10 @@ import type {
   ChatStreamToolProgressEvent,
 } from '@bubble-town/shared';
 
+function compactInput(value: string): string {
+  return value.length > 80 ? `${value.slice(0, 80)}...` : value;
+}
+
 function writeSseEvent(reply: FastifyReply, event: string, payload: unknown) {
   if (reply.raw.writableEnded || reply.raw.destroyed) {
     return;
@@ -38,11 +42,38 @@ export async function registerChatRoutes(app: FastifyInstance) {
       attachments?: ChatImageAttachment[];
       mode?: 'responses' | 'chat-completions';
     };
+    request.log.info({
+      profileId: body.profileId,
+      sessionId: body.sessionId ?? body.conversation,
+      responseId: body.responseId,
+      mode: body.mode,
+      inputPreview: compactInput(body.input ?? ''),
+    }, 'chat respond request');
     const gateway = await ensureManagedHermesGateway(body.profileId);
-    return sendChat(body, {
+    const gatewayInstance = gateway.gateways?.find((entry) => entry.expectedProfileId === gateway.profileId);
+    request.log.info({
+      requestedProfileId: body.profileId,
+      gatewayExpectedProfileId: gatewayInstance?.expectedProfileId ?? gateway.profileId,
+      gatewayActualProfileId: gatewayInstance?.actualProfileId,
+      gatewayApiBaseUrl: gateway.apiBaseUrl,
+      gatewayPort: gateway.port,
+      gatewayPid: gateway.pid,
+      expectedHermesHome: gatewayInstance?.expectedHermesHome,
+      actualHermesHome: gatewayInstance?.actualHermesHome,
+    }, 'chat respond gateway ready');
+    const result = await sendChat(body, {
       apiBaseUrl: gateway.apiBaseUrl,
       managedGatewayProfileId: gateway.profileId,
     });
+    request.log.info({
+      requestedProfileId: body.profileId,
+      gatewayExpectedProfileId: gatewayInstance?.expectedProfileId ?? gateway.profileId,
+      gatewayActualProfileId: gatewayInstance?.actualProfileId,
+      returnedSessionId: result.sessionId,
+      returnedResponseId: result.responseId,
+      model: result.model,
+    }, 'chat respond complete');
+    return result;
   });
 
   app.post('/api/chat/respond-stream', async (request, reply) => {
@@ -76,12 +107,50 @@ export async function registerChatRoutes(app: FastifyInstance) {
     });
 
     try {
+      request.log.info({
+        profileId: body.profileId,
+        sessionId: body.sessionId ?? body.conversation,
+        responseId: body.responseId,
+        mode: body.mode,
+        inputPreview: compactInput(body.input ?? ''),
+      }, 'chat stream request');
       const gateway = await ensureManagedHermesGateway(body.profileId);
+      const gatewayInstance = gateway.gateways?.find((entry) => entry.expectedProfileId === gateway.profileId);
+      request.log.info({
+        requestedProfileId: body.profileId,
+        gatewayExpectedProfileId: gatewayInstance?.expectedProfileId ?? gateway.profileId,
+        gatewayActualProfileId: gatewayInstance?.actualProfileId,
+        gatewayApiBaseUrl: gateway.apiBaseUrl,
+        gatewayPort: gateway.port,
+        gatewayPid: gateway.pid,
+        expectedHermesHome: gatewayInstance?.expectedHermesHome,
+        actualHermesHome: gatewayInstance?.actualHermesHome,
+      }, 'chat stream gateway ready');
       await streamChat(body, {
-        onStart: (event: ChatStreamStartEvent) => writeSseEvent(reply, 'message-start', event),
+        onStart: (event: ChatStreamStartEvent) => {
+          request.log.info({
+            requestedProfileId: body.profileId,
+            gatewayExpectedProfileId: gatewayInstance?.expectedProfileId ?? gateway.profileId,
+            gatewayActualProfileId: gatewayInstance?.actualProfileId,
+            returnedSessionId: event.sessionId,
+            returnedResponseId: event.responseId,
+            model: event.model,
+          }, 'chat stream start');
+          writeSseEvent(reply, 'message-start', event);
+        },
         onDelta: (delta: string) => writeSseEvent(reply, 'message-delta', { delta } satisfies ChatStreamDeltaEvent),
         onToolProgress: (event: ChatStreamToolProgressEvent) => writeSseEvent(reply, 'tool-progress', event),
-        onComplete: (event: ChatStreamCompleteEvent) => writeSseEvent(reply, 'message-complete', event),
+        onComplete: (event: ChatStreamCompleteEvent) => {
+          request.log.info({
+            requestedProfileId: body.profileId,
+            gatewayExpectedProfileId: gatewayInstance?.expectedProfileId ?? gateway.profileId,
+            gatewayActualProfileId: gatewayInstance?.actualProfileId,
+            returnedSessionId: event.sessionId,
+            returnedResponseId: event.responseId,
+            model: event.model,
+          }, 'chat stream complete');
+          writeSseEvent(reply, 'message-complete', event);
+        },
       }, {
         signal: abortController.signal,
       }, {
