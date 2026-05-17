@@ -64,13 +64,33 @@ To run the desktop shell together with them:
 npm run dev:all
 ```
 
+### Start Development on LAN
+
+To make the web app available to other devices on the same network:
+
+```bash
+npm run dev:lan
+```
+
+This starts the web frontend on `0.0.0.0` and the Companion service on `0.0.0.0:3030`.
+Open the Vite network URL printed in the terminal, for example:
+
+```text
+http://192.168.1.23:5173/
+```
+
+When the app is opened through a LAN address, the frontend automatically calls the Companion service on the same host at port `3030`.
+
 ## Common Commands
 
 | Command | Description |
 | --- | --- |
 | `npm run dev` | Start the `web + companion` development environment |
+| `npm run dev:lan` | Start `web + companion` for LAN access |
 | `npm run dev:web` | Start only the web frontend |
+| `npm run dev:web:lan` | Start only the web frontend for LAN access |
 | `npm run dev:backend` | Start only the local Companion service |
+| `npm run dev:backend:lan` | Start only the Companion service for LAN access |
 | `npm run dev:companion` | Alias of `dev:backend` |
 | `npm run dev:desktop` | Start only the Electron desktop shell |
 | `npm run dev:all` | Start `web + companion + desktop` together |

@@ -6,9 +6,12 @@
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "dev": "concurrently -n web,backend -c cyan,magenta \"npm run dev:web\" \"npm run dev:backend\"",
+    "dev:lan": "concurrently -n web,backend -c cyan,magenta \"npm run dev:web:lan\" \"npm run dev:backend:lan\"",
     "dev:all": "concurrently -n web,backend,desktop -c cyan,magenta,yellow \"npm run dev:web\" \"npm run dev:backend\" \"npm run dev:desktop\"",
     "dev:web": "npm run dev -w @bubble-town/web",
+    "dev:web:lan": "npm run dev:lan -w @bubble-town/web",
     "dev:backend": "npm run dev -w @bubble-town/companion",
+    "dev:backend:lan": "npm run dev:lan -w @bubble-town/companion",
     "dev:companion": "npm run dev -w @bubble-town/companion",
     "dev:desktop": "npm run dev -w @bubble-town/desktop",
     "check": "npm run check --workspaces --if-present",

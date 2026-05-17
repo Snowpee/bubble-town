@@ -90,7 +90,7 @@ function createWindow() {
   const isDev = Boolean(process.env.ELECTRON_RENDERER_URL);
   const preloadPath = isDev
     ? path.join(__dirname, 'preload.cjs')
-    : path.join(__dirname, '..', 'dist', 'preload.js');
+    : path.join(__dirname, '..', 'electron', 'preload.cjs');
 
   const mainWindow = new BrowserWindow({
     width: 1440,

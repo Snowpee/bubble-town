@@ -64,13 +64,33 @@ npm run dev
 npm run dev:all
 ```
 
+### 启动内网访问模式
+
+如果需要让同一局域网内的其他设备访问 Web 应用：
+
+```bash
+npm run dev:lan
+```
+
+该命令会让 Web 前端监听 `0.0.0.0`，并让 Companion 服务监听 `0.0.0.0:3030`。
+启动后打开终端里 Vite 输出的 Network 地址，例如：
+
+```text
+http://192.168.1.23:5173/
+```
+
+通过内网地址打开应用时，前端会自动请求同一台主机 `3030` 端口上的 Companion 服务。
+
 ## 常用命令
 
 | 命令 | 说明 |
 | --- | --- |
 | `npm run dev` | 启动 `web + companion` 开发环境 |
+| `npm run dev:lan` | 以内网可访问模式启动 `web + companion` |
 | `npm run dev:web` | 仅启动 Web 前端 |
+| `npm run dev:web:lan` | 以内网可访问模式仅启动 Web 前端 |
 | `npm run dev:backend` | 仅启动本地 Companion 服务 |
+| `npm run dev:backend:lan` | 以内网可访问模式仅启动 Companion 服务 |
 | `npm run dev:companion` | `dev:backend` 的别名 |
 | `npm run dev:desktop` | 仅启动 Electron 桌面壳 |
 | `npm run dev:all` | 同时启动 `web + companion + desktop` |

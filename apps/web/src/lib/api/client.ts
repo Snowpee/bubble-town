@@ -1,8 +1,22 @@
 const browserCompanionUrl =
   typeof window !== 'undefined' ? window.bubbleTownDesktop?.companionUrl : undefined;
 
+function getBrowserDefaultCompanionUrl() {
+  if (typeof window === 'undefined') {
+    return undefined;
+  }
+
+  const { hostname, protocol } = window.location;
+  if (!hostname) {
+    return undefined;
+  }
+
+  const normalizedHost = hostname.includes(':') ? `[${hostname}]` : hostname;
+  return `${protocol}//${normalizedHost}:3030`;
+}
+
 export const COMPANION_URL =
-  browserCompanionUrl ?? import.meta.env.VITE_COMPANION_URL ?? 'http://127.0.0.1:3030';
+  browserCompanionUrl ?? import.meta.env.VITE_COMPANION_URL ?? getBrowserDefaultCompanionUrl() ?? 'http://127.0.0.1:3030';
 
 async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
