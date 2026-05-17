@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MoreHorizontal, Plus } from 'lucide-react';
-import type { ProfileSummary } from '@bubble-town/shared';
+import { DEFAULT_PROFILE_ID, type ProfileSummary } from '@bubble-town/shared';
+import { LoadingLabel, ProfileGridSkeleton } from '@/components/loading/loading-state';
 import { createProfile, deleteProfile, fetchProfiles, renameProfile, switchProfile } from '@/lib/api/profiles';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { Badge } from '@/components/ui/badge';
@@ -25,7 +26,7 @@ export function ProfilesRoute() {
   const switchProfileMutation = useMutation({
     mutationFn: switchProfile,
     onSuccess: (result) => {
-      setActiveProfileId(result.activeProfile?.id);
+      setActiveProfileId(result.activeProfile?.id ?? DEFAULT_PROFILE_ID);
       void queryClient.invalidateQueries({ queryKey: ['profiles'] });
       void queryClient.invalidateQueries({ queryKey: ['profiles-page'] });
       void queryClient.invalidateQueries({ queryKey: ['sessions'] });
@@ -104,58 +105,67 @@ export function ProfilesRoute() {
   }
 
   const pending = switchProfileMutation.isPending || createProfileMutation.isPending || renameProfileMutation.isPending || deleteProfileMutation.isPending;
+  const isLoading = profilesQuery.isLoading;
 
   return (
     <>
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-4">
-          <div className="space-y-1.5">
-            <CardTitle>Profile 管理</CardTitle>
-            <CardDescription>现在已接入创建、重命名、删除与切换；所有会话都会严格绑定当前激活 profile。</CardDescription>
+      <div>
+        <div className="flex flex-row items-center justify-between gap-4 mb-4">
+          <div className="space-y-2">
+            <h2 className="text-xl font-semibold tracking-tight">Profile 管理</h2>
           </div>
           <Button onClick={openCreateDialog}>
             <Plus className="mr-2 h-4 w-4" />
             新建 Profile
           </Button>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {(profilesQuery.data?.profiles ?? []).map((profile) => (
-            <div key={profile.id} className="rounded-3xl border border-border bg-card p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="font-medium">{profile.name}</div>
-                  <div className="text-xs text-muted-foreground">{profile.id}</div>
+        </div>
+        <div className="space-y-4">
+          {isLoading ? (
+            <>
+              <LoadingLabel />
+              <ProfileGridSkeleton />
+            </>
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {(profilesQuery.data?.profiles ?? []).map((profile) => (
+                <div key={profile.id} className="rounded-3xl border border-border bg-card p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-medium">{profile.name}</div>
+                      <div className="text-xs text-muted-foreground">{profile.id}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={profile.isActive ? 'default' : 'secondary'}>{profile.isActive ? '激活中' : '待机'}</Badge>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="sm">
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuLabel>Profile 操作</DropdownMenuLabel>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => switchProfileMutation.mutate(profile.id)}>切换到此 profile</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => openRenameDialog(profile)}>重命名</DropdownMenuItem>
+                          <DropdownMenuItem disabled={profile.isActive} onClick={() => openDeleteDialog(profile)}>
+                            删除
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
+                    <span>{profile.sessionCount ?? 0} 个会话</span>
+                    <Button variant="outline" size="sm" disabled={pending} onClick={() => switchProfileMutation.mutate(profile.id)}>
+                      {activeProfileId === profile.id ? '当前 profile' : '切换'}
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={profile.isActive ? 'default' : 'secondary'}>{profile.isActive ? '激活中' : '待机'}</Badge>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="sm">
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuLabel>Profile 操作</DropdownMenuLabel>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => switchProfileMutation.mutate(profile.id)}>切换到此 profile</DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => openRenameDialog(profile)}>重命名</DropdownMenuItem>
-                      <DropdownMenuItem disabled={profile.isActive} onClick={() => openDeleteDialog(profile)}>
-                        删除
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-              <div className="mt-4 flex items-center justify-between text-sm text-muted-foreground">
-                <span>{profile.sessionCount ?? 0} 个会话</span>
-                <Button variant="outline" size="sm" disabled={pending} onClick={() => switchProfileMutation.mutate(profile.id)}>
-                  {activeProfileId === profile.id ? '当前 profile' : '切换'}
-                </Button>
-              </div>
+              ))}
             </div>
-          ))}
-        </CardContent>
-      </Card>
+          )}
+        </div>
+      </div>
 
       <Dialog open={dialogMode !== null} onOpenChange={(open) => !open && setDialogMode(null)}>
         <DialogContent>

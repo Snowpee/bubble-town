@@ -15,7 +15,7 @@ export default function App() {
   const setActiveProfileId = useWorkspaceStore((state) => state.setActiveProfileId);
 
   useEffect(() => {
-    if (!activeProfileId && profilesQuery.data?.activeProfileId) {
+    if (profilesQuery.data?.activeProfileId && profilesQuery.data.activeProfileId !== activeProfileId) {
       setActiveProfileId(profilesQuery.data.activeProfileId);
     }
   }, [activeProfileId, profilesQuery.data?.activeProfileId, setActiveProfileId]);

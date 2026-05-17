@@ -21,6 +21,7 @@ interface DrawerContentProps extends React.ComponentPropsWithoutRef<typeof Drawe
   portal?: boolean;
   overlay?: boolean;
   overlayClassName?: string;
+  overlayStyle?: React.CSSProperties;
 }
 
 const directionClasses: Record<DrawerDirection, string> = {
@@ -33,11 +34,12 @@ const directionClasses: Record<DrawerDirection, string> = {
 const DrawerContent = React.forwardRef<
   React.ElementRef<typeof DrawerPrimitive.Content>,
   DrawerContentProps
->(({ direction = 'bottom', portal = true, overlay = true, overlayClassName, className, children, ...props }, ref) => {
+>(({ direction = 'bottom', portal = true, overlay = true, overlayClassName, overlayStyle, className, children, ...props }, ref) => {
   const content = (
     <>
       {overlay ? (
         <DrawerOverlay
+          style={overlayStyle}
           className={cn(
             portal ? 'fixed inset-0 z-40 bg-black/60 backdrop-blur-sm' : 'absolute inset-0 z-10 bg-background/60 backdrop-blur-[2px]',
             overlayClassName,

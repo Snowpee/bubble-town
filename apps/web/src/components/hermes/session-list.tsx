@@ -1,4 +1,5 @@
 import type { SessionSummary } from '@bubble-town/shared';
+import type { ReactNode } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
@@ -7,6 +8,12 @@ interface SessionListProps {
   activeSessionId?: string;
   onSelect?: (sessionId: string) => void;
   className?: string;
+  contentClassName?: string;
+  itemClassName?: string;
+  showItemBorder?: boolean;
+  showLastMessagePreview?: boolean;
+  renderLeading?: (session: SessionSummary) => ReactNode;
+  renderActions?: (session: SessionSummary) => ReactNode;
   emptyTitle?: string;
   emptyDescription?: string;
 }
@@ -27,6 +34,12 @@ export function SessionList({
   activeSessionId,
   onSelect,
   className,
+  contentClassName,
+  itemClassName: itemClassNameProp,
+  showItemBorder = false,
+  showLastMessagePreview = false,
+  renderLeading,
+  renderActions,
   emptyTitle = '还没有会话',
   emptyDescription = '发送第一条消息后，这里会自动显示最新会话记录。',
 }: SessionListProps) {
@@ -42,44 +55,76 @@ export function SessionList({
   }
 
   return (
-    <ScrollArea className={cn('min-h-0 flex-1 overflow-y-auto p-4', className)}>
-      <div className="space-y-2">
-        {sessions.map((session) => {
-          const itemClassName = cn(
-            'flex w-full flex-col rounded-xl px-4 py-3 text-left transition-colors',
-            onSelect && 'hover:bg-secondary/50',
-            activeSessionId === session.sessionId ? 'bg-secondary text-foreground' : 'bg-transparent text-foreground',
-          );
-
-          const content = (
-            <>
-              <div className="flex items-start justify-between gap-3">
-                <span className="line-clamp-2 text-sm font-medium leading-6">{session.title}</span>
-                <span className="shrink-0 rounded-full bg-secondary px-2 py-0.5 text-[11px] text-muted-foreground">{session.messageCount} 条</span>
-              </div>
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <span>{formatSessionTime(session.updatedAt)}</span>
-                <span className="h-1 w-1 rounded-full bg-border" />
-                <span className="truncate">{session.source}</span>
-              </div>
-            </>
-          );
-
-          if (!onSelect) {
-            return (
-              <div key={session.sessionId} className={itemClassName}>
-                {content}
-              </div>
-            );
+    <ScrollArea className={cn('min-h-0 flex-1 overflow-y-auto', className)} contentClassName={cn('space-y-2', contentClassName)}>
+      {sessions.map((session) => {
+        const leading = renderLeading?.(session);
+        const actions = renderActions?.(session);
+        const handleSelect = () => onSelect?.(session.sessionId);
+        const handleInteractiveKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+          if (event.key !== 'Enter' && event.key !== ' ') {
+            return;
           }
 
+          event.preventDefault();
+          handleSelect();
+        };
+        const itemClassName = cn(
+          'flex w-full items-start gap-3 rounded-xl px-4 py-3 text-left transition-colors',
+          showItemBorder && 'border border-border/70',
+          onSelect && 'cursor-pointer hover:bg-secondary/50',
+          activeSessionId === session.sessionId ? 'bg-secondary text-foreground' : 'bg-transparent text-foreground',
+          itemClassNameProp,
+        );
+
+        const content = (
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-2">
+              <span className="line-clamp-2 text-sm font-medium leading-6">{session.title}</span>
+            </div>
+            {showLastMessagePreview && session.lastMessagePreview ? (
+              <p className="mt-1 line-clamp-2 text-sm leading-6 text-muted-foreground">{session.lastMessagePreview}</p>
+            ) : null}
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground/50">
+              <span>{formatSessionTime(session.updatedAt)}</span>
+              <span className="h-1 w-1 rounded-full bg-border" />
+              <span className="truncate">{session.source}</span>
+              <span className="h-1 w-1 rounded-full bg-border" />
+              <span className="truncate">{session.messageCount} 条</span>
+            </div>
+          </div>
+        );
+
+        if (!onSelect || leading || actions) {
           return (
-            <button key={session.sessionId} type="button" onClick={() => onSelect(session.sessionId)} className={itemClassName}>
+            <div
+              key={session.sessionId}
+              className={itemClassName}
+              role={onSelect ? 'button' : undefined}
+              tabIndex={onSelect ? 0 : undefined}
+              onClick={onSelect ? handleSelect : undefined}
+              onKeyDown={onSelect ? handleInteractiveKeyDown : undefined}
+            >
+              {leading ? (
+                <div className="shrink-0 pt-1" onClick={(event) => event.stopPropagation()}>
+                  {leading}
+                </div>
+              ) : null}
               {content}
-            </button>
+              {actions ? (
+                <div className="shrink-0" onClick={(event) => event.stopPropagation()}>
+                  {actions}
+                </div>
+              ) : null}
+            </div>
           );
-        })}
-      </div>
+        }
+
+        return (
+          <button key={session.sessionId} type="button" onClick={handleSelect} className={itemClassName}>
+            {content}
+          </button>
+        );
+      })}
     </ScrollArea>
   );
 }

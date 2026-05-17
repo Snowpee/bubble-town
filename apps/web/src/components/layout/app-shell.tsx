@@ -1,8 +1,7 @@
 import { forwardRef, type ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { History, Menu, MessageSquare, Moon, Settings2, Sun, UserRoundCog } from 'lucide-react';
+import { History, MessageSquare, Moon, Settings2, Sun, UserRoundCog } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useTheme } from '@/hooks/useTheme';
 import { cn } from '@/lib/utils';
@@ -93,10 +92,10 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <div
       className="flex h-dvh overflow-hidden bg-background text-foreground"
-      style={{ ['--sidebar-width' as string]: '5rem' }}
+      style={{ ['--sidebar-width' as string]: '4.5rem' }}
     >
       <TooltipProvider delayDuration={100}>
-        <aside className="sticky top-0 z-30 hidden h-screen w-18 shrink-0 flex-col items-center overflow-y-auto border-r border-border/70 bg-card/70 px-3 py-6 backdrop-blur lg:flex">
+        <aside className="sticky top-0 z-30 flex h-screen w-[var(--sidebar-width)] shrink-0 flex-col items-center overflow-y-auto border-r border-border/70 bg-card/70 px-3 py-6 backdrop-blur">
           <div className="mb-8 flex items-center justify-center">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -133,29 +132,10 @@ export function AppShell({ children }: AppShellProps) {
           </div>
         </aside>
         <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="fixed left-4 top-4 z-20 lg:hidden">
-            <Sheet>
-              <SheetTrigger asChild>
-                <Button variant="outline" size="sm" className="rounded-xl bg-background/85 shadow-sm backdrop-blur">
-                  <Menu className="h-4 w-4" />
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="left" className="flex w-[280px] flex-col">
-                <SheetHeader className="mb-6">
-                  <SheetTitle>Bubble Town</SheetTitle>
-                  <SheetDescription>快速进入聊天、会话、Profiles 和设置页面。</SheetDescription>
-                </SheetHeader>
-                <AppNav currentPath={location.pathname} />
-                <div className="mt-auto border-t border-border/70 pt-6">
-                  <ThemeToggleButton isDark={isDark} theme={theme} toggleTheme={toggleTheme} className="w-full justify-start rounded-2xl" />
-                </div>
-              </SheetContent>
-            </Sheet>
-          </div>
           <div
             className={cn(
               'flex min-h-0 flex-1 flex-col',
-              isChatRoute ? 'overflow-hidden' : 'overflow-y-auto sm:px-6 sm:pt-24 lg:px-8 lg:py-8 lg:pt-8',
+              isChatRoute ? 'overflow-hidden' : 'overflow-y-auto px-6 py-8 lg:px-8',
             )}
           >
             {children}

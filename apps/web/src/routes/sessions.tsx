@@ -1,27 +1,51 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { fetchSessions } from '@/lib/api/hermes';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { CheckSquare, Eye, Trash2, X } from 'lucide-react';
+import { deleteSession, fetchSessions } from '@/lib/api/hermes';
+import { LoadingLabel, SessionListSkeleton } from '@/components/loading/loading-state';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { SessionList } from '@/components/hermes/session-list';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Skeleton } from '@/components/ui/skeleton';
 
 export function SessionsRoute() {
   const activeProfileId = useWorkspaceStore((state) => state.activeProfileId);
+  const queryClient = useQueryClient();
   const [query, setQuery] = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [summaryFilter, setSummaryFilter] = useState('all');
+  const [bulkManageOpen, setBulkManageOpen] = useState(false);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   const sessionsQuery = useQuery({
     queryKey: ['sessions-index', activeProfileId],
     queryFn: () => fetchSessions(activeProfileId),
   });
+  const deleteSessionsMutation = useMutation({
+    mutationFn: async ({ sessionIds, profileId }: { sessionIds: string[]; profileId?: string }) => {
+      await Promise.all(sessionIds.map((sessionId) => deleteSession(sessionId, profileId)));
+    },
+    onSuccess: async (_result, variables) => {
+      variables.sessionIds.forEach((sessionId) => {
+        queryClient.removeQueries({ queryKey: ['session-detail', variables.profileId, sessionId] });
+      });
+      setSelectedSessionIds(new Set());
+      setDeleteConfirmOpen(false);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['sessions'] }),
+        queryClient.invalidateQueries({ queryKey: ['sessions-index'] }),
+      ]);
+    },
+  });
 
-  const sessions = sessionsQuery.data?.sessions ?? [];
+  const sessions = useMemo(() => sessionsQuery.data?.sessions ?? [], [sessionsQuery.data?.sessions]);
   const sourceOptions = useMemo(() => Array.from(new Set(sessions.map((session) => session.source).filter(Boolean))).sort(), [sessions]);
   const normalizedQuery = query.trim().toLowerCase();
   const filteredSessions = useMemo(() => {
@@ -47,7 +71,15 @@ export function SessionsRoute() {
       })
       .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
   }, [normalizedQuery, sessions, sourceFilter, summaryFilter]);
+  const selectedSessions = useMemo(
+    () => sessions.filter((session) => selectedSessionIds.has(session.sessionId)),
+    [selectedSessionIds, sessions],
+  );
+  const selectedVisibleCount = filteredSessions.filter((session) => selectedSessionIds.has(session.sessionId)).length;
+  const allFilteredSelected = filteredSessions.length > 0 && selectedVisibleCount === filteredSessions.length;
   const hasFilters = normalizedQuery.length > 0 || sourceFilter !== 'all' || summaryFilter !== 'all';
+  const isLoading = sessionsQuery.isLoading;
+  const isDeleting = deleteSessionsMutation.isPending;
 
   function resetFilters() {
     setQuery('');
@@ -55,21 +87,100 @@ export function SessionsRoute() {
     setSummaryFilter('all');
   }
 
+  function toggleSessionSelection(sessionId: string) {
+    setSelectedSessionIds((current) => {
+      const next = new Set(current);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+      } else {
+        next.add(sessionId);
+      }
+      return next;
+    });
+  }
+
+  function toggleFilteredSelection() {
+    setSelectedSessionIds((current) => {
+      const next = new Set(current);
+      if (allFilteredSelected) {
+        filteredSessions.forEach((session) => next.delete(session.sessionId));
+      } else {
+        filteredSessions.forEach((session) => next.add(session.sessionId));
+      }
+      return next;
+    });
+  }
+
+  function clearSelection() {
+    setSelectedSessionIds(new Set());
+  }
+
+  function enterBulkManage() {
+    setBulkManageOpen(true);
+  }
+
+  function exitBulkManage() {
+    setBulkManageOpen(false);
+    clearSelection();
+  }
+
+  async function handleConfirmDelete() {
+    if (selectedSessions.length === 0 || isDeleting) {
+      return;
+    }
+
+    try {
+      await deleteSessionsMutation.mutateAsync({
+        sessionIds: selectedSessions.map((session) => session.sessionId),
+        profileId: activeProfileId,
+      });
+    } catch {
+      return;
+    }
+  }
+
   return (
     <div className="space-y-6">
-      <section className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+      <section className="flex flex-col gap-3 lg:flex-row items-center lg:justify-between">
         <div className="space-y-2">
-          <h2 className="text-2xl font-semibold tracking-tight">会话</h2>
+          <h2 className="text-xl font-semibold tracking-tight">会话</h2>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">{sessions.length} 个会话</Badge>
-          <Badge variant="secondary">{filteredSessions.length} 个结果</Badge>
+          <Badge variant="secondary">{isLoading ? '加载中' : `${sessions.length} 个会话`}</Badge>
+          <Badge variant="secondary">{isLoading ? '加载中' : `${filteredSessions.length} 个结果`}</Badge>
           <Button asChild>
             <Link to="/chat">前往聊天页</Link>
           </Button>
         </div>
       </section>
 
+      {isLoading ? (
+        <div className="space-y-4">
+          <LoadingLabel />
+          <Card>
+            <CardHeader className="space-y-3">
+              <CardTitle>会话筛选</CardTitle>
+              <CardDescription>正在加载会话索引与筛选条件。</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_220px_220px]">
+                <Skeleton className="h-10 w-full rounded-md" />
+                <Skeleton className="h-10 w-full rounded-md" />
+                <Skeleton className="h-10 w-full rounded-md" />
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Skeleton className="h-4 w-36" />
+                <Skeleton className="h-1 w-1 rounded-full" />
+                <Skeleton className="h-4 w-28" />
+                <Skeleton className="h-1 w-1 rounded-full" />
+                <Skeleton className="h-4 w-20" />
+              </div>
+            </CardContent>
+          </Card>
+          <SessionListSkeleton className="p-0" count={8} />
+        </div>
+      ) : (
+        <>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             {hasFilters ? (
               <Button variant="outline" onClick={resetFilters}>
@@ -78,9 +189,18 @@ export function SessionsRoute() {
             ) : null}
           </div>
 
-
-
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_220px_220px]">
+          <div className="grid gap-3 lg:grid-cols-[132px_minmax(0,1.6fr)_220px_220px]">
+            {bulkManageOpen ? (
+              <Button type="button" variant="outline" onClick={exitBulkManage} disabled={isDeleting} className="w-full">
+                <X className="mr-2 h-4 w-4" />
+                退出管理
+              </Button>
+            ) : (
+              <Button type="button" variant="outline" onClick={enterBulkManage} disabled={filteredSessions.length === 0} className="w-full">
+                <CheckSquare className="mr-2 h-4 w-4" />
+                批量管理
+              </Button>
+            )}
             <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索会话标题、摘要或来源" />
 
             <Select value={sourceFilter} onValueChange={setSourceFilter}>
@@ -117,9 +237,79 @@ export function SessionsRoute() {
             <span>{sourceOptions.length} 个来源</span>
           </div>
 
+          {bulkManageOpen ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 px-4 py-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="inline-flex items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={allFilteredSelected}
+                    disabled={filteredSessions.length === 0 || isDeleting}
+                    onChange={toggleFilteredSelection}
+                    className="h-4 w-4 rounded border-border"
+                  />
+                  <span>选择当前结果</span>
+                </label>
+                <span className="text-sm text-muted-foreground">
+                  已选 {selectedSessions.length} 条
+                  {selectedVisibleCount !== selectedSessions.length ? `，当前筛选中 ${selectedVisibleCount} 条` : ''}
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {selectedSessions.length > 0 ? (
+                  <Button type="button" variant="outline" size="sm" onClick={clearSelection} disabled={isDeleting}>
+                    取消选择
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setDeleteConfirmOpen(true)}
+                  disabled={selectedSessions.length === 0 || isDeleting}
+                  className="text-destructive hover:text-destructive"
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  删除所选
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           <SessionList
             sessions={filteredSessions}
             className="max-h-none"
+            contentClassName="space-y-2"
+            itemClassName="p-4"
+            showItemBorder
+            showLastMessagePreview
+            onSelect={bulkManageOpen ? toggleSessionSelection : undefined}
+            renderLeading={
+              bulkManageOpen
+                ? (session) => (
+                    <input
+                      type="checkbox"
+                      aria-label={`选择会话 ${session.title}`}
+                      checked={selectedSessionIds.has(session.sessionId)}
+                      disabled={isDeleting}
+                      onChange={() => toggleSessionSelection(session.sessionId)}
+                      className="h-4 w-4 rounded border-border"
+                    />
+                )
+                : undefined
+            }
+            renderActions={
+              bulkManageOpen
+                ? undefined
+                : (session) => (
+                    <Button asChild variant="secondary" size="sm">
+                      <Link to={`/chat/${encodeURIComponent(session.sessionId)}`}>
+                        <Eye className="mr-1 h-4 w-4" />
+                        查看会话
+                      </Link>
+                    </Button>
+                  )
+            }
             emptyTitle={sessions.length === 0 ? '还没有历史会话' : '没有符合条件的会话'}
             emptyDescription={
               sessions.length === 0
@@ -127,6 +317,28 @@ export function SessionsRoute() {
                 : '试试调整搜索词或筛选条件，列表会立即按当前条件重新计算。'
             }
           />
+
+          <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>删除所选会话</DialogTitle>
+                <DialogDescription>
+                  将删除当前选中的 {selectedSessions.length} 条会话记录。此操作会移除本地会话文件，删除后无法在列表中恢复。
+                </DialogDescription>
+              </DialogHeader>
+              {deleteSessionsMutation.isError ? <p className="text-sm text-destructive">删除失败，请稍后重试。</p> : null}
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setDeleteConfirmOpen(false)} disabled={isDeleting}>
+                  取消
+                </Button>
+                <Button type="button" onClick={handleConfirmDelete} disabled={selectedSessions.length === 0 || isDeleting}>
+                  {isDeleting ? '删除中...' : '确认删除'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </>
+      )}
     </div>
   );
 }

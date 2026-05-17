@@ -254,10 +254,37 @@ function ToolEventCard({ event }: { event: ToolProgressEvent }) {
   );
 }
 
+function MessageAttachments({ message }: { message: ChatMessageType }) {
+  if (!message.attachments?.length) {
+    return null;
+  }
+
+  return (
+    <div className="grid gap-2 sm:grid-cols-2">
+      {message.attachments.map((attachment, index) => (
+        <a
+          key={`${attachment.url}-${index}`}
+          href={attachment.url}
+          target="_blank"
+          rel="noreferrer"
+          className="block overflow-hidden rounded-2xl border border-border/60 bg-background/60"
+        >
+          <img
+            src={attachment.url}
+            alt={attachment.name ?? `附件图片 ${index + 1}`}
+            className="h-auto max-h-72 w-full object-cover"
+          />
+        </a>
+      ))}
+    </div>
+  );
+}
+
 export function ChatMessage({ message, assistantMessageViewMode = 'bubble', showToolActivity = false }: ChatMessageProps) {
   const toolEvents = message.toolEvents ?? [];
   const latestActiveToolEvent = showToolActivity ? getLatestActiveToolEvent(toolEvents) : undefined;
-  const isStreamingPlaceholder = message.role === 'assistant' && message.content.length === 0 && !latestActiveToolEvent;
+  const hasAttachments = (message.attachments?.length ?? 0) > 0;
+  const isStreamingPlaceholder = message.role === 'assistant' && message.content.length === 0 && !hasAttachments && !latestActiveToolEvent;
   const isToolMessage = message.role === 'tool';
   const shouldRenderMarkdown = message.role === 'assistant' && !isStreamingPlaceholder;
   const isAssistantDocumentMode = message.role === 'assistant' && assistantMessageViewMode === 'document';
@@ -286,10 +313,17 @@ export function ChatMessage({ message, assistantMessageViewMode = 'bubble', show
           <LoaderCircle className="h-4 w-4 animate-spin" />
           <span>思考中...</span>
         </div>
-      ) : shouldRenderMarkdown ? (
-        <MarkdownContent content={message.content} />
       ) : (
-        <div className="whitespace-pre-wrap">{message.content}</div>
+        <div className="space-y-3">
+          <MessageAttachments message={message} />
+          {message.content ? (
+            shouldRenderMarkdown ? (
+              <MarkdownContent content={message.content} />
+            ) : (
+              <div className="whitespace-pre-wrap">{message.content}</div>
+            )
+          ) : null}
+        </div>
       )}
 
       {latestActiveToolEvent ? (

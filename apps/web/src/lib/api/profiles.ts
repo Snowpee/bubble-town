@@ -1,4 +1,4 @@
-import type { CreateProfileRequest, ProfileSummary, ProfilesResponse, UpdateProfileRequest } from '@bubble-town/shared';
+import { DEFAULT_PROFILE_ID, type CreateProfileRequest, type ProfileSummary, type ProfilesResponse, type UpdateProfileRequest } from '@bubble-town/shared';
 import type { SessionSummary } from '@bubble-town/shared';
 import { apiDelete, apiGet, apiPatch, apiPost } from './client';
 
@@ -7,7 +7,9 @@ export function fetchProfiles() {
 }
 
 export function switchProfile(profileId: string) {
-  return apiPost<{ activeProfile?: ProfileSummary; sessions: SessionSummary[] }>('/api/profiles/switch', { profileId });
+  return apiPost<{ activeProfile?: ProfileSummary; sessions: SessionSummary[] }>('/api/profiles/switch', {
+    profileId: profileId || DEFAULT_PROFILE_ID,
+  });
 }
 
 export function createProfile(input: CreateProfileRequest) {

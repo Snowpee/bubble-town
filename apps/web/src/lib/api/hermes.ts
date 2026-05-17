@@ -10,6 +10,7 @@ import type {
   SessionDetail,
   SessionSummary,
 } from '@bubble-town/shared';
+import { DEFAULT_PROFILE_ID } from '@bubble-town/shared';
 import { apiDelete, apiGet, apiPost, COMPANION_URL } from './client';
 
 export function fetchHealth() {
@@ -17,22 +18,22 @@ export function fetchHealth() {
 }
 
 export function fetchSessions(profileId?: string) {
-  const query = profileId ? `?profileId=${encodeURIComponent(profileId)}` : '';
+  const query = `?profileId=${encodeURIComponent(profileId || DEFAULT_PROFILE_ID)}`;
   return apiGet<{ sessions: SessionSummary[] }>(`/api/sessions${query}`);
 }
 
 export function fetchSessionDetail(sessionId: string, profileId?: string) {
-  const query = profileId ? `?profileId=${encodeURIComponent(profileId)}` : '';
+  const query = `?profileId=${encodeURIComponent(profileId || DEFAULT_PROFILE_ID)}`;
   return apiGet<SessionDetail>(`/api/sessions/${encodeURIComponent(sessionId)}${query}`);
 }
 
 export function fetchSessionSummary(sessionId: string, profileId?: string) {
-  const query = profileId ? `?profileId=${encodeURIComponent(profileId)}` : '';
+  const query = `?profileId=${encodeURIComponent(profileId || DEFAULT_PROFILE_ID)}`;
   return apiGet<SessionSummary>(`/api/sessions/${encodeURIComponent(sessionId)}/summary${query}`);
 }
 
 export function deleteSession(sessionId: string, profileId?: string) {
-  const query = profileId ? `?profileId=${encodeURIComponent(profileId)}` : '';
+  const query = `?profileId=${encodeURIComponent(profileId || DEFAULT_PROFILE_ID)}`;
   return apiDelete<{ success: boolean }>(`/api/sessions/${encodeURIComponent(sessionId)}${query}`);
 }
 

@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { DEFAULT_PROFILE_ID } from '@bubble-town/shared';
 import { fetchHealth } from '@/lib/api/hermes';
+import { LoadingLabel, SettingsPanelSkeleton, StatusCardSkeleton } from '@/components/loading/loading-state';
 import { fetchProfiles, switchProfile } from '@/lib/api/profiles';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { StatusCard } from '@/components/hermes/status-card';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
@@ -19,7 +20,7 @@ export function SettingsRoute() {
   const switchProfileMutation = useMutation({
     mutationFn: switchProfile,
     onSuccess: async (result) => {
-      setActiveProfileId(result.activeProfile?.id);
+      setActiveProfileId(result.activeProfile?.id ?? DEFAULT_PROFILE_ID);
       await queryClient.invalidateQueries({ queryKey: ['profiles'] });
       await queryClient.invalidateQueries({ queryKey: ['profiles-page'] });
       await queryClient.invalidateQueries({ queryKey: ['profiles-settings'] });
@@ -27,6 +28,8 @@ export function SettingsRoute() {
       await queryClient.invalidateQueries({ queryKey: ['sessions-index'] });
     },
   });
+  const isHealthLoading = healthQuery.isLoading;
+  const isProfilesLoading = profilesQuery.isLoading;
 
   return (
     <div className="space-y-6">
@@ -42,49 +45,83 @@ export function SettingsRoute() {
               <TabsTrigger value="env">环境配置</TabsTrigger>
             </TabsList>
             <TabsContent value="health" className="grid gap-4 lg:grid-cols-2">
-              {healthQuery.isLoading
-                ? Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="h-36 rounded-2xl" />)
-                : (healthQuery.data?.items ?? []).map((item) => <StatusCard key={item.key} item={item} />)}
+              {isHealthLoading ? (
+                <>
+                  <div className="lg:col-span-2">
+                    <LoadingLabel />
+                  </div>
+                  <StatusCardSkeleton />
+                </>
+              ) : (
+                (healthQuery.data?.items ?? []).map((item) => <StatusCard key={item.key} item={item} />)
+              )}
             </TabsContent>
             <TabsContent value="env">
-              <div className="grid gap-4 lg:grid-cols-2">
-                <div className="rounded-2xl border border-border bg-card/60 p-4">
-                  <div className="mb-3 text-sm font-medium">当前 Profile</div>
-                  <Select value={activeProfileId} onValueChange={(value) => switchProfileMutation.mutate(value)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="选择当前 Profile" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(profilesQuery.data?.profiles ?? []).map((profile) => (
-                        <SelectItem key={profile.id} value={profile.id}>
-                          {profile.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="mt-3 text-sm text-muted-foreground">切换后，聊天和会话列表会自动绑定到目标 profile。</p>
+              {isProfilesLoading && isHealthLoading ? (
+                <div className="space-y-4">
+                  <LoadingLabel />
+                  <SettingsPanelSkeleton />
                 </div>
+              ) : (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-2xl border border-border bg-card/60 p-4">
+                    <div className="mb-3 text-sm font-medium">当前 Profile</div>
+                    {isProfilesLoading ? (
+                      <div className="space-y-3">
+                        <LoadingLabel />
+                        <SettingsPanelSkeleton />
+                      </div>
+                    ) : (
+                      <>
+                        <Select value={activeProfileId} onValueChange={(value) => switchProfileMutation.mutate(value)}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="选择当前 Profile" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {(profilesQuery.data?.profiles ?? []).map((profile) => (
+                              <SelectItem key={profile.id} value={profile.id}>
+                                {profile.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <p className="mt-3 text-sm text-muted-foreground">切换后，聊天和会话列表会自动绑定到目标 profile。</p>
+                      </>
+                    )}
+                  </div>
 
-                <div className="rounded-2xl border border-border bg-card/60 p-4">
-                  <div className="mb-3 text-sm font-medium">聊天协议模式</div>
-                  <Select value={chatMode} onValueChange={(value: 'responses' | 'chat-completions') => setChatMode(value)}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="选择 Hermes 协议模式" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="responses">responses</SelectItem>
-                      <SelectItem value="chat-completions">chat-completions</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="mt-3 text-sm text-muted-foreground">当前已接入前端共享状态。后续可继续与 companion 和真实 Hermes 配置联动。</p>
-                </div>
+                  <div className="rounded-2xl border border-border bg-card/60 p-4">
+                    <div className="mb-3 text-sm font-medium">聊天协议模式</div>
+                    <Select value={chatMode} onValueChange={(value: 'responses' | 'chat-completions') => setChatMode(value)}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="选择 Hermes 协议模式" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="responses">responses</SelectItem>
+                        <SelectItem value="chat-completions">chat-completions</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="mt-3 text-sm text-muted-foreground">当前已接入前端共享状态。后续可继续与 companion 和真实 Hermes 配置联动。</p>
+                  </div>
 
-                <div className="rounded-2xl border border-border bg-card/60 p-4 text-sm text-muted-foreground lg:col-span-2">
-                  <div className="mb-2 font-medium text-foreground">当前探测到的连接信息</div>
-                  <div>Hermes 根目录：{healthQuery.data?.detected.hermesRoot ?? '未探测到'}</div>
-                  <div>API Server：{healthQuery.data?.detected.apiBaseUrl ?? '未探测到'}</div>
+                  <div className="rounded-2xl border border-border bg-card/60 p-4 text-sm text-muted-foreground lg:col-span-2">
+                    <div className="mb-2 font-medium text-foreground">当前探测到的连接信息</div>
+                    {isHealthLoading ? (
+                      <div className="space-y-3">
+                        <LoadingLabel />
+                        <div className="space-y-2">
+                          <SettingsPanelSkeleton />
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div>Hermes 根目录：{healthQuery.data?.detected.hermesRoot ?? '未探测到'}</div>
+                        <div>API Server：{healthQuery.data?.detected.apiBaseUrl ?? '未探测到'}</div>
+                      </>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </TabsContent>
           </Tabs>
         </CardContent>
