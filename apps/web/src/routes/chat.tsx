@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Menu, MoreHorizontal, Paperclip, Plus, SendHorizonal, Square, X } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { deleteSession as deleteHermesSession, fetchSessionDetail, fetchSessionSummary, fetchSessions, streamChat } from '@/lib/api/hermes';
+import { logProfileDebug } from '@/lib/debug/profile-debug';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { SessionList } from '@/components/hermes/session-list';
 import { ChatMessage } from '@/components/hermes/chat-message';
@@ -127,10 +128,11 @@ export function ChatRoute() {
     queryFn: () => fetchSessions(activeProfileId),
   });
 
+  const isStreamingRouteSession = Boolean(routeSessionId && streamingState?.status === 'streaming' && streamingState.sessionId === routeSessionId);
   const sessionDetailQuery = useQuery({
     queryKey: ['session-detail', activeProfileId, routeSessionId],
     queryFn: () => fetchSessionDetail(routeSessionId!, activeProfileId),
-    enabled: Boolean(routeSessionId),
+    enabled: Boolean(routeSessionId) && !isStreamingRouteSession,
   });
 
   const sessions = sessionsQuery.data?.sessions ?? [];
@@ -138,6 +140,33 @@ export function ChatRoute() {
   const activeResponseId =
     sessionDetailQuery.data?.summary.responseId ??
     sessions.find((session) => session.sessionId === activeSessionId)?.responseId;
+
+  useEffect(() => {
+    if (!sessionsQuery.data) {
+      return;
+    }
+
+    logProfileDebug('chat-sessions-loaded', {
+      activeProfileId,
+      count: sessions.length,
+      sessionProfiles: Array.from(new Set(sessions.map((session) => session.profileId))),
+      firstSessionId: sessions[0]?.sessionId,
+    });
+  }, [activeProfileId, sessions, sessionsQuery.data]);
+
+  useEffect(() => {
+    if (!sessionDetailQuery.data) {
+      return;
+    }
+
+    logProfileDebug('chat-session-detail-loaded', {
+      activeProfileId,
+      routeSessionId,
+      summarySessionId: sessionDetailQuery.data.summary.sessionId,
+      summaryProfileId: sessionDetailQuery.data.summary.profileId,
+      responseId: sessionDetailQuery.data.summary.responseId,
+    });
+  }, [activeProfileId, routeSessionId, sessionDetailQuery.data]);
 
   useEffect(() => {
     activeSessionRef.current = activeSessionId;
@@ -371,6 +400,18 @@ export function ChatRoute() {
     const abortController = new AbortController();
     const startingSessionId = activeSessionId;
     const requestSessionId = activeSessionId;
+    const requestProfileId = activeProfileId;
+    const requestResponseId = activeResponseId;
+    logProfileDebug('chat-send-start', {
+      activeProfileId,
+      requestProfileId,
+      routeSessionId,
+      activeSessionId,
+      requestSessionId,
+      activeResponseId,
+      chatMode,
+      hasAttachments: attachments.length > 0,
+    });
     abortControllerRef.current = abortController;
     latestStreamingSessionRef.current = requestSessionId;
     clearScheduledTitleRefresh();
@@ -397,9 +438,16 @@ export function ChatRoute() {
 
     try {
       const response = await streamChat(
-        { input, attachments, profileId: activeProfileId, sessionId: requestSessionId, responseId: activeResponseId, mode: chatMode },
+        { input, attachments, profileId: requestProfileId, sessionId: requestSessionId, responseId: requestResponseId, mode: chatMode },
         {
           onStart: (event) => {
+            logProfileDebug('chat-stream-start', {
+              requestProfileId,
+              routeSessionId,
+              requestedSessionId: requestSessionId,
+              returnedSessionId: event.sessionId,
+              returnedResponseId: event.responseId,
+            });
             latestStreamingSessionRef.current = event.sessionId;
             setDraft('');
             setPendingAttachments([]);
@@ -413,6 +461,14 @@ export function ChatRoute() {
                 : current,
             );
             navigate(`/chat/${encodeURIComponent(event.sessionId)}`, { replace: true });
+          },
+          onComplete: (event) => {
+            logProfileDebug('chat-stream-complete-event', {
+              requestProfileId,
+              requestedSessionId: requestSessionId,
+              returnedSessionId: event.sessionId,
+              returnedResponseId: event.responseId,
+            });
           },
           onDelta: ({ delta }) => {
             setStreamingState((current) =>
@@ -443,6 +499,13 @@ export function ChatRoute() {
         },
       );
 
+      logProfileDebug('chat-send-complete', {
+        requestProfileId,
+        requestedSessionId: requestSessionId,
+        returnedSessionId: response.sessionId,
+        returnedResponseId: response.responseId,
+        model: response.model,
+      });
       await refreshChatState(response.sessionId);
       if (!startingSessionId && response.sessionId) {
         scheduleTitleRefresh(response.sessionId);

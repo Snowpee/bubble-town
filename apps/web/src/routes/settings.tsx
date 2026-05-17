@@ -4,6 +4,7 @@ import { fetchHealth } from '@/lib/api/hermes';
 import { LoadingLabel, SettingsPanelSkeleton, StatusCardSkeleton } from '@/components/loading/loading-state';
 import { markActiveProfileInResponse } from '@/lib/api/profile-cache';
 import { fetchProfiles, switchProfile } from '@/lib/api/profiles';
+import { logProfileDebug } from '@/lib/debug/profile-debug';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { StatusCard } from '@/components/hermes/status-card';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,9 +20,21 @@ export function SettingsRoute() {
   const healthQuery = useQuery({ queryKey: ['health'], queryFn: fetchHealth });
   const profilesQuery = useQuery({ queryKey: ['profiles-settings'], queryFn: fetchProfiles });
   const switchProfileMutation = useMutation({
-    mutationFn: switchProfile,
+    mutationFn: (profileId: string) => {
+      logProfileDebug('settings-switch-request', {
+        currentActiveProfileId: activeProfileId,
+        requestedProfileId: profileId,
+      });
+      return switchProfile(profileId);
+    },
     onSuccess: async (result) => {
       const nextProfileId = result.activeProfile?.id ?? DEFAULT_PROFILE_ID;
+      logProfileDebug('settings-switch-success', {
+        previousActiveProfileId: activeProfileId,
+        nextProfileId,
+        returnedActiveProfileId: result.activeProfile?.id,
+        returnedSessionProfiles: Array.from(new Set(result.sessions.map((session) => session.profileId))),
+      });
       queryClient.setQueryData<ProfilesResponse>(['profiles'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
       queryClient.setQueryData<ProfilesResponse>(['profiles-page'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
       queryClient.setQueryData<ProfilesResponse>(['profiles-settings'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
@@ -31,6 +44,12 @@ export function SettingsRoute() {
       await queryClient.invalidateQueries({ queryKey: ['profiles-settings'] });
       await queryClient.invalidateQueries({ queryKey: ['sessions'] });
       await queryClient.invalidateQueries({ queryKey: ['sessions-index'] });
+    },
+    onError: (error, requestedProfileId) => {
+      logProfileDebug('settings-switch-error', {
+        requestedProfileId,
+        message: error instanceof Error ? error.message : String(error),
+      });
     },
   });
   const isHealthLoading = healthQuery.isLoading;

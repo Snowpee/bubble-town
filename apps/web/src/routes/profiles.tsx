@@ -5,6 +5,7 @@ import { DEFAULT_PROFILE_ID, type ProfileSummary, type ProfilesResponse } from '
 import { LoadingLabel, ProfileGridSkeleton } from '@/components/loading/loading-state';
 import { createProfile, deleteProfile, fetchProfiles, renameProfile, switchProfile } from '@/lib/api/profiles';
 import { markActiveProfileInResponse } from '@/lib/api/profile-cache';
+import { logProfileDebug } from '@/lib/debug/profile-debug';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -25,9 +26,21 @@ export function ProfilesRoute() {
   const [selectedProfile, setSelectedProfile] = useState<ProfileSummary | null>(null);
 
   const switchProfileMutation = useMutation({
-    mutationFn: switchProfile,
+    mutationFn: (profileId: string) => {
+      logProfileDebug('profiles-switch-request', {
+        currentActiveProfileId: activeProfileId,
+        requestedProfileId: profileId,
+      });
+      return switchProfile(profileId);
+    },
     onSuccess: (result) => {
       const nextProfileId = result.activeProfile?.id ?? DEFAULT_PROFILE_ID;
+      logProfileDebug('profiles-switch-success', {
+        previousActiveProfileId: activeProfileId,
+        nextProfileId,
+        returnedActiveProfileId: result.activeProfile?.id,
+        returnedSessionProfiles: Array.from(new Set(result.sessions.map((session) => session.profileId))),
+      });
       queryClient.setQueryData<ProfilesResponse>(['profiles'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
       queryClient.setQueryData<ProfilesResponse>(['profiles-page'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
       queryClient.setQueryData<ProfilesResponse>(['profiles-settings'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
@@ -36,6 +49,12 @@ export function ProfilesRoute() {
       void queryClient.invalidateQueries({ queryKey: ['profiles-page'] });
       void queryClient.invalidateQueries({ queryKey: ['sessions'] });
       void queryClient.invalidateQueries({ queryKey: ['sessions-index'] });
+    },
+    onError: (error, requestedProfileId) => {
+      logProfileDebug('profiles-switch-error', {
+        requestedProfileId,
+        message: error instanceof Error ? error.message : String(error),
+      });
     },
   });
 

@@ -297,7 +297,7 @@ export function ChatMessage({ message, assistantMessageViewMode = 'bubble', show
   return (
     <div
       className={cn(
-        'text-sm',
+        'text-base',
         isAssistantDocumentMode
           ? 'w-full max-w-none px-0 py-0 text-foreground'
           : [

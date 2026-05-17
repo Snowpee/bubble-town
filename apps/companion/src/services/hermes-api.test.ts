@@ -160,6 +160,92 @@ test('sendChat 使用响应头里的 Hermes 原生 sessionId，并把 transcript
   }
 });
 
+test('sendChat 在 Responses responseId 过期时回退到 chat-completions 续同一个 session', async () => {
+  const hermesHome = createHermesHome();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; headers: Record<string, string>; payload: Record<string, unknown> }> = [];
+
+  globalThis.fetch = async (input, init) => {
+    const payload = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+    const headers = init?.headers as Record<string, string>;
+    fetchCalls.push({
+      url: String(input),
+      headers,
+      payload,
+    });
+
+    if (String(input).endsWith('/responses')) {
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: 'Previous response not found: resp_stale',
+            type: 'invalid_request_error',
+          },
+        }),
+        {
+          status: 404,
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        id: 'chatcmpl_turn_2',
+        model: 'hermes-agent',
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: '第二轮回复',
+            },
+          },
+        ],
+      }),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Hermes-Session-Id': 'native-session-123',
+        },
+      },
+    );
+  };
+
+  try {
+    const response = await sendChat({
+      input: '继续说',
+      sessionId: 'native-session-123',
+      responseId: 'resp_stale',
+    });
+
+    assert.equal(fetchCalls.length, 2);
+    assert.equal(fetchCalls[0]?.url, 'http://127.0.0.1:8642/v1/responses');
+    assert.deepEqual(fetchCalls[0]?.payload, {
+      model: 'hermes-agent',
+      input: '继续说',
+      stream: false,
+      store: true,
+      previous_response_id: 'resp_stale',
+    });
+    assert.equal(fetchCalls[1]?.url, 'http://127.0.0.1:8642/v1/chat/completions');
+    assert.equal(fetchCalls[1]?.headers['X-Hermes-Session-Id'], 'native-session-123');
+    assert.deepEqual(fetchCalls[1]?.payload.messages, [
+      {
+        role: 'user',
+        content: '继续说',
+      },
+    ]);
+    assert.equal(response.sessionId, 'native-session-123');
+    assert.equal(response.responseId, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanupHermesHome(hermesHome);
+  }
+});
+
 test('sendChat 在只有 responseId 的续链请求中只写 Hermes 原生 session transcript', async () => {
   const hermesHome = createHermesHome();
   const originalFetch = globalThis.fetch;

@@ -3,6 +3,7 @@ import { Navigate, Route, BrowserRouter as Router, Routes } from 'react-router-d
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/app-shell';
 import { fetchProfiles } from '@/lib/api/profiles';
+import { logProfileDebug } from '@/lib/debug/profile-debug';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { ChatRoute } from '@/routes/chat';
 import { ProfilesRoute } from '@/routes/profiles';
@@ -16,6 +17,10 @@ export default function App() {
 
   useEffect(() => {
     if (profilesQuery.data?.activeProfileId && profilesQuery.data.activeProfileId !== activeProfileId) {
+      logProfileDebug('app-sync-active-profile-from-server', {
+        previousActiveProfileId: activeProfileId,
+        serverActiveProfileId: profilesQuery.data.activeProfileId,
+      });
       setActiveProfileId(profilesQuery.data.activeProfileId);
     }
   }, [activeProfileId, profilesQuery.data?.activeProfileId, setActiveProfileId]);

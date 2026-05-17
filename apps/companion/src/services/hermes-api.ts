@@ -1035,6 +1035,14 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
+async function readErrorDetails(response: Response): Promise<string> {
+  return response.text();
+}
+
+function isMissingPreviousResponseError(status: number, details: string): boolean {
+  return status === 404 && details.includes('Previous response not found');
+}
+
 export async function streamChat(
   request: ChatRequest,
   handlers: StreamChatHandlers = {},
@@ -1045,7 +1053,8 @@ export async function streamChat(
   const context = createChatTurnContext(request, mode, executionOptions);
   const now = new Date().toISOString();
   const payload = buildRequestPayload(mode, context, request, now, true);
-  const response = await fetch(`${context.apiBaseUrl}${getRequestPath(mode)}`, {
+  let effectiveMode = mode;
+  let response = await fetch(`${context.apiBaseUrl}${getRequestPath(mode)}`, {
     method: 'POST',
     headers: buildHermesRequestHeaders(context),
     body: JSON.stringify(payload),
@@ -1053,7 +1062,28 @@ export async function streamChat(
   });
 
   if (!response.ok) {
-    const details = await response.text();
+    const details = await readErrorDetails(response);
+    if (mode === 'responses' && context.sessionId && isMissingPreviousResponseError(response.status, details)) {
+      const fallbackContext = {
+        ...context,
+        useSessionContinuationHeader: true,
+      };
+      const fallbackPayload = buildChatCompletionPayload(fallbackContext, request, now, true);
+      response = await fetch(`${context.apiBaseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: buildHermesRequestHeaders(fallbackContext),
+        body: JSON.stringify(fallbackPayload),
+        signal: options.signal,
+      });
+      if (response.ok) {
+        context.useSessionContinuationHeader = fallbackContext.useSessionContinuationHeader;
+        effectiveMode = 'chat-completions';
+      }
+    }
+  }
+
+  if (!response.ok) {
+    const details = await readErrorDetails(response);
     throw new Error(`Hermes API 请求失败: ${response.status}${details ? ` ${details}` : ''}`);
   }
 
@@ -1066,7 +1096,7 @@ export async function streamChat(
   let buffer = '';
   let output = '';
   let model = 'hermes-agent';
-  let responseId = request.responseId;
+  let responseId = effectiveMode === 'chat-completions' ? undefined : request.responseId;
   let sessionId = resolveSessionIdFromHeaders(response.headers) ?? resolveRequestSessionId(request);
   let toolEvents: ChatStreamToolProgressEvent[] = [];
   let startEmitted = false;
@@ -1110,7 +1140,7 @@ export async function streamChat(
         const payloadJson = safeJsonParse(rawData);
         const resolvedEventName = resolveStreamEventName(eventName, payloadJson);
         model = extractModel(payloadJson, model);
-        responseId = extractResponseId(payloadJson) ?? responseId;
+        responseId = effectiveMode === 'chat-completions' ? undefined : extractResponseId(payloadJson) ?? responseId;
         sessionId = resolveCanonicalSessionId(request, payloadJson, sessionId);
         emitStart();
 
@@ -1137,7 +1167,7 @@ export async function streamChat(
       const payloadJson = rawData && rawData !== '[DONE]' ? safeJsonParse(rawData) : undefined;
       const resolvedEventName = resolveStreamEventName(eventName, payloadJson);
       model = extractModel(payloadJson, model);
-      responseId = extractResponseId(payloadJson) ?? responseId;
+      responseId = effectiveMode === 'chat-completions' ? undefined : extractResponseId(payloadJson) ?? responseId;
       sessionId = resolveCanonicalSessionId(request, payloadJson, sessionId);
       emitStart();
 
@@ -1166,7 +1196,7 @@ export async function streamChat(
     const persisted = persistConversationTurn(context, request, output, model, completedAt, {
       sessionId,
       responseId,
-      mode,
+      mode: effectiveMode,
     }, toolEvents);
 
     context.sessionId = persisted.sessionId ?? context.sessionId ?? sessionId;
@@ -1178,7 +1208,7 @@ export async function streamChat(
   const persisted = persistConversationTurn(context, request, output, model, completedAt, {
     sessionId,
     responseId,
-    mode,
+    mode: effectiveMode,
   }, toolEvents);
   const finalSessionId = requireSessionId(persisted.sessionId ?? context.sessionId ?? sessionId);
 
@@ -1202,21 +1232,41 @@ export async function sendChat(request: ChatRequest, executionOptions: ChatExecu
   const now = new Date().toISOString();
   const payload = buildRequestPayload(mode, context, request, now, false);
 
-  const response = await fetch(`${context.apiBaseUrl}${getRequestPath(mode)}`, {
+  let response = await fetch(`${context.apiBaseUrl}${getRequestPath(mode)}`, {
     method: 'POST',
     headers: buildHermesRequestHeaders(context),
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    const details = await response.text();
+    const details = await readErrorDetails(response);
+    if (mode === 'responses' && context.sessionId && isMissingPreviousResponseError(response.status, details)) {
+      const fallbackContext = {
+        ...context,
+        useSessionContinuationHeader: true,
+      };
+      const fallbackPayload = buildChatCompletionPayload(fallbackContext, request, now, false);
+      response = await fetch(`${context.apiBaseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: buildHermesRequestHeaders(fallbackContext),
+        body: JSON.stringify(fallbackPayload),
+      });
+      if (response.ok) {
+        context.useSessionContinuationHeader = fallbackContext.useSessionContinuationHeader;
+      }
+    }
+  }
+
+  if (!response.ok) {
+    const details = await readErrorDetails(response);
     throw new Error(`Hermes API 请求失败: ${response.status}${details ? ` ${details}` : ''}`);
   }
 
   const data = (await response.json()) as JsonRecord;
-  const output = mode === 'chat-completions' ? extractChatCompletionOutput(data) : extractCompletedOutput(data, '');
+  const effectiveMode = context.useSessionContinuationHeader ? 'chat-completions' : mode;
+  const output = effectiveMode === 'chat-completions' ? extractChatCompletionOutput(data) : extractCompletedOutput(data, '');
   const model = extractModel(data, 'hermes-agent');
-  const responseId = extractResponseId(data);
+  const responseId = effectiveMode === 'chat-completions' ? undefined : extractResponseId(data);
   const sessionId =
     resolveSessionIdFromHeaders(response.headers)
     ?? resolveCanonicalSessionId(request, data, context.sessionId)
@@ -1224,7 +1274,7 @@ export async function sendChat(request: ChatRequest, executionOptions: ChatExecu
   const persisted = persistConversationTurn(context, request, output, model, now, {
     sessionId,
     responseId,
-    mode,
+    mode: effectiveMode,
   });
   const finalSessionId = requireSessionId(persisted.sessionId ?? sessionId ?? context.sessionId);
 
