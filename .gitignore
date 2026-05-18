@@ -1,0 +1,14 @@
+node_modules
+npm-debug.log*
+dist
+coverage
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*
+!.env.example
+.project
+.codex
+AGENT.md
+.tmp-hermes
+apps/desktop/release
