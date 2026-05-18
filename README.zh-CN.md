@@ -99,7 +99,7 @@ http://192.168.1.23:5173/
 | `npm run build` | 构建全部工作区 |
 | `npm run package:desktop` | 构建并打包桌面应用 |
 | `npm run release:desktop:dry-run` | 预览 macOS 桌面版 GitHub Release 发布命令 |
-| `npm run release:desktop` | 构建 macOS 桌面版并通过 GitHub CLI 发布 Release |
+| `npm run release:desktop` | 构建 macOS arm64 + x64 桌面版并通过 GitHub CLI 发布 Release |
 
 ## 开发说明
 
@@ -154,7 +154,20 @@ git push origin main v1.0.3
 npm run release:desktop -- --version 1.0.3
 ```
 
-脚本会执行桌面端打包，读取 `apps/desktop/release` 中匹配版本号的 `.dmg`、`.zip` 与增量更新辅助文件，并发布到 `v1.0.3`。如果该 Release 已存在，会改为上传并覆盖同名附件。
+脚本会清理 `apps/desktop/release`，分别构建 macOS `arm64` 和 `x64` 两个独立包，读取匹配版本号的 `.dmg`、`.zip` 与增量更新辅助文件，并发布到 `v1.0.3`。如果该 Release 已存在，会改为上传并覆盖同名附件。
+
+只构建单一架构时可以指定：
+
+```bash
+npm run release:desktop -- --version 1.0.3 --arch arm64
+npm run release:desktop -- --version 1.0.3 --arch x64
+```
+
+如果已经提前生成好两个架构的产物，可以跳过构建直接上传：
+
+```bash
+npm run release:desktop -- --version 1.0.3 --skip-build
+```
 
 ## 当前状态
 

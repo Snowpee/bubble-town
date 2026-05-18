@@ -99,7 +99,7 @@ When the app is opened through a LAN address, the frontend automatically calls t
 | `npm run build` | Build all workspaces |
 | `npm run package:desktop` | Build and package the desktop app |
 | `npm run release:desktop:dry-run` | Preview the macOS desktop GitHub Release command |
-| `npm run release:desktop` | Build and publish the macOS desktop Release via GitHub CLI |
+| `npm run release:desktop` | Build and publish macOS arm64 + x64 desktop Releases via GitHub CLI |
 
 ## Development Notes
 
@@ -154,7 +154,20 @@ Publish the release:
 npm run release:desktop -- --version 1.0.3
 ```
 
-The script builds the desktop app, selects matching `.dmg`, `.zip`, and update helper files from `apps/desktop/release`, then publishes them to `v1.0.3`. If the release already exists, it uploads the assets and overwrites matching filenames.
+The script cleans `apps/desktop/release`, builds separate macOS `arm64` and `x64` packages, selects matching `.dmg`, `.zip`, and update helper files, then publishes them to `v1.0.3`. If the release already exists, it uploads the assets and overwrites matching filenames.
+
+To build only one architecture:
+
+```bash
+npm run release:desktop -- --version 1.0.3 --arch arm64
+npm run release:desktop -- --version 1.0.3 --arch x64
+```
+
+If both architecture builds already exist, skip packaging and only upload:
+
+```bash
+npm run release:desktop -- --version 1.0.3 --skip-build
+```
 
 ## Current Status
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -18,6 +18,8 @@ function parseArgs(argv) {
     prerelease: false,
     clobber: true,
     generateNotes: true,
+    clean: true,
+    arches: ['arm64', 'x64'],
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -55,6 +57,9 @@ function parseArgs(argv) {
       case '--target':
         options.target = next();
         break;
+      case '--arch':
+        options.arches = parseArches(next());
+        break;
       case '--dry-run':
         options.dryRun = true;
         break;
@@ -73,6 +78,9 @@ function parseArgs(argv) {
       case '--no-generate-notes':
         options.generateNotes = false;
         break;
+      case '--no-clean':
+        options.clean = false;
+        break;
       case '--help':
       case '-h':
         options.help = true;
@@ -83,6 +91,21 @@ function parseArgs(argv) {
   }
 
   return options;
+}
+
+function parseArches(value) {
+  const arches = value
+    .split(',')
+    .map((arch) => arch.trim())
+    .filter(Boolean);
+  const allowedArches = new Set(['arm64', 'x64']);
+  const invalidArch = arches.find((arch) => !allowedArches.has(arch));
+
+  if (arches.length === 0 || invalidArch) {
+    throw new Error(`Invalid --arch value: ${value}. Use arm64, x64, or arm64,x64.`);
+  }
+
+  return [...new Set(arches)];
 }
 
 function printHelp() {
@@ -102,12 +125,14 @@ Options:
   --notes-file <path>       Release notes file.
   --repo <owner/repo>       GitHub repository for gh.
   --target <branch|sha>     Target commit when creating the tag via gh.
+  --arch <arch[,arch]>      macOS arch list. Defaults to arm64,x64.
   --skip-build              Upload existing files from apps/desktop/release.
   --dry-run                 Print commands and selected assets without running them.
   --draft                   Create the release as a draft.
   --prerelease              Mark the release as a prerelease.
   --no-clobber              Do not overwrite assets when updating an existing release.
   --no-generate-notes       Do not ask GitHub to generate release notes.
+  --no-clean                Do not remove apps/desktop/release before building.
 `);
 }
 
@@ -172,8 +197,12 @@ function getDesktopVersion(options) {
   return options.version ?? readJson(desktopPackagePath).version;
 }
 
-function getReleaseAssets(version) {
+function getReleaseAssets(version, options) {
   if (!existsSync(releaseDir)) {
+    if (options.dryRun) {
+      return [];
+    }
+
     throw new Error(`Release directory does not exist: ${path.relative(rootDir, releaseDir)}`);
   }
 
@@ -196,7 +225,20 @@ function buildRelease(options) {
     return;
   }
 
-  run('npm', ['run', 'package:desktop'], options);
+  if (options.clean) {
+    const relativeReleaseDir = path.relative(rootDir, releaseDir);
+    if (options.dryRun) {
+      console.log(`[dry-run] remove ${relativeReleaseDir}`);
+    } else {
+      rmSync(releaseDir, { recursive: true, force: true });
+    }
+  }
+
+  run('npm', ['run', 'build', '--workspaces', '--if-present'], options);
+
+  for (const arch of options.arches) {
+    run('npm', ['run', 'package', '-w', '@bubble-town/desktop', '--', '--mac', `--${arch}`], options);
+  }
 }
 
 function createRelease(tag, title, assets, options) {
@@ -257,7 +299,7 @@ function main() {
   ensureCommand('gh', options);
   buildRelease(options);
 
-  const assets = getReleaseAssets(version);
+  const assets = getReleaseAssets(version, options);
   if (assets.length === 0) {
     if (options.dryRun) {
       console.log(`Release: ${title} (${tag})`);
