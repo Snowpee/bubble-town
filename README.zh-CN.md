@@ -98,6 +98,8 @@ http://192.168.1.23:5173/
 | `npm run test` | 运行工作区测试 |
 | `npm run build` | 构建全部工作区 |
 | `npm run package:desktop` | 构建并打包桌面应用 |
+| `npm run release:desktop:dry-run` | 预览 macOS 桌面版 GitHub Release 发布命令 |
+| `npm run release:desktop` | 构建 macOS 桌面版并通过 GitHub CLI 发布 Release |
 
 ## 开发说明
 
@@ -124,6 +126,35 @@ npm run package:desktop
 ```
 
 打包产物默认输出到 `apps/desktop/release`。
+
+## 发布 macOS 桌面版
+
+本地发布依赖 GitHub CLI。首次使用前先登录：
+
+```bash
+gh auth login
+```
+
+发布前建议先预览：
+
+```bash
+npm run release:desktop:dry-run -- --version 1.0.3 --skip-build
+```
+
+正式发布前，应先提交版本变更并推送对应 tag：
+
+```bash
+git tag v1.0.3
+git push origin main v1.0.3
+```
+
+正式发布：
+
+```bash
+npm run release:desktop -- --version 1.0.3
+```
+
+脚本会执行桌面端打包，读取 `apps/desktop/release` 中匹配版本号的 `.dmg`、`.zip` 与增量更新辅助文件，并发布到 `v1.0.3`。如果该 Release 已存在，会改为上传并覆盖同名附件。
 
 ## 当前状态
 

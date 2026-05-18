@@ -98,6 +98,8 @@ When the app is opened through a LAN address, the frontend automatically calls t
 | `npm run test` | Run workspace tests |
 | `npm run build` | Build all workspaces |
 | `npm run package:desktop` | Build and package the desktop app |
+| `npm run release:desktop:dry-run` | Preview the macOS desktop GitHub Release command |
+| `npm run release:desktop` | Build and publish the macOS desktop Release via GitHub CLI |
 
 ## Development Notes
 
@@ -124,6 +126,35 @@ npm run package:desktop
 ```
 
 The packaged output is written to `apps/desktop/release` by default.
+
+## Publishing the macOS Desktop App
+
+Local publishing uses GitHub CLI. Log in once before publishing:
+
+```bash
+gh auth login
+```
+
+Preview the release first:
+
+```bash
+npm run release:desktop:dry-run -- --version 1.0.3 --skip-build
+```
+
+Before publishing, commit the version changes and push the release tag:
+
+```bash
+git tag v1.0.3
+git push origin main v1.0.3
+```
+
+Publish the release:
+
+```bash
+npm run release:desktop -- --version 1.0.3
+```
+
+The script builds the desktop app, selects matching `.dmg`, `.zip`, and update helper files from `apps/desktop/release`, then publishes them to `v1.0.3`. If the release already exists, it uploads the assets and overwrites matching filenames.
 
 ## Current Status
 

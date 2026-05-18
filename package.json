@@ -17,6 +17,8 @@
     "check": "npm run check --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "package:desktop": "npm run build --workspaces --if-present && npm run package -w @bubble-town/desktop",
+    "release:desktop": "node scripts/release-desktop.mjs",
+    "release:desktop:dry-run": "node scripts/release-desktop.mjs --dry-run",
     "test": "npm run test --workspaces --if-present"
   },
   "devDependencies": {
