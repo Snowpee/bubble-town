@@ -4,9 +4,11 @@
 
 详细设计、产品范围与完整代码规范见：
 
-- `.trae/documents/hermes-web-client-prd.md`
-- `.trae/documents/hermes-web-client-architecture.md`
-- `.trae/documents/hermes-web-client-coding-standards.md`
+- `.project/documents/prd.md`
+- `.project/documents/plan.md`
+- `.project/documents/architecture.md`
+- `.project/documents/coding-standards.md`
+- `.project/GOVERNANCE.md`
 
 ## 1. 项目目标
 
