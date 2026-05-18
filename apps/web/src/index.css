@@ -171,3 +171,20 @@
     @apply bg-background text-foreground;
   }
 }
+
+@layer utilities {
+  .app-drag-region {
+    -webkit-app-region: drag;
+  }
+
+  .app-no-drag,
+  .app-drag-region a,
+  .app-drag-region button,
+  .app-drag-region input,
+  .app-drag-region textarea,
+  .app-drag-region select,
+  .app-drag-region [role='button'],
+  .app-drag-region [role='menuitem'] {
+    -webkit-app-region: no-drag;
+  }
+}

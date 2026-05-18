@@ -288,6 +288,7 @@ export function ChatMessage({ message, assistantMessageViewMode = 'bubble', show
   const isToolMessage = message.role === 'tool';
   const shouldRenderMarkdown = message.role === 'assistant' && !isStreamingPlaceholder;
   const isAssistantDocumentMode = message.role === 'assistant' && assistantMessageViewMode === 'document';
+  const isUserDocumentMode = message.role === 'user' && assistantMessageViewMode === 'document';
   const isGeneratingReply = latestActiveToolEvent ? isMessageTool(latestActiveToolEvent.toolName) : false;
 
   if (isToolMessage) {
@@ -303,7 +304,7 @@ export function ChatMessage({ message, assistantMessageViewMode = 'bubble', show
           : [
               'max-w-[80%] rounded-2xl px-4 py-3',
               message.role === 'user'
-                ? 'ml-auto rounded-br-xs bg-primary text-primary-foreground'
+                ? cn('ml-auto rounded-br-xs', isUserDocumentMode ? 'bg-muted text-card-foreground' : 'bg-primary text-primary-foreground')
                 : 'rounded-bl-xs bg-muted text-card-foreground',
             ],
       )}

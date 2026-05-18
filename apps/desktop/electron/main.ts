@@ -8,6 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const companionHost = process.env.ELECTRON_COMPANION_HOST ?? '127.0.0.1';
 const companionPort = Number(process.env.ELECTRON_COMPANION_PORT ?? 3030);
+const macOSTrafficLightPosition = { x: 10, y: 16 };
 
 let companionProcess: UtilityProcess | null = null;
 let isAppQuitting = false;
@@ -103,8 +104,13 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    titleBarStyle: 'hiddenInset',
+    titleBarStyle: 'hidden',
+    ...(process.platform === 'darwin' ? { trafficLightPosition: macOSTrafficLightPosition } : {}),
   });
+
+  if (process.platform === 'darwin') {
+    mainWindow.setWindowButtonPosition(macOSTrafficLightPosition);
+  }
 
   if (isDev && process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);

@@ -88,15 +88,26 @@ export function AppShell({ children }: AppShellProps) {
   const { theme, toggleTheme, isDark } = useTheme();
   const location = useLocation();
   const isChatRoute = location.pathname === '/chat' || location.pathname.startsWith('/chat/');
+  const desktopBridge = window.bubbleTownDesktop;
+  const isMacDesktop = desktopBridge?.platform === 'darwin';
+  const macOSTitlebarReserve = desktopBridge?.titlebarReserve ?? '4.75rem';
 
   return (
     <div
       className="flex h-dvh overflow-hidden bg-background text-foreground"
-      style={{ ['--sidebar-width' as string]: '4.5rem' }}
+      style={{
+        ['--sidebar-width' as string]: '4.5rem',
+        ['--macos-titlebar-reserve' as string]: macOSTitlebarReserve,
+      }}
     >
       <TooltipProvider delayDuration={100}>
-        <aside className="sticky top-0 z-30 flex h-screen w-[var(--sidebar-width)] shrink-0 flex-col items-center overflow-y-auto border-r border-border/70 bg-card/70 px-3 py-6 backdrop-blur">
-          <div className="mb-8 flex items-center justify-center">
+        <aside
+          className={cn(
+            'app-drag-region sticky top-0 z-30 flex h-screen w-[var(--sidebar-width)] shrink-0 flex-col items-center overflow-y-auto border-r border-border/70 bg-card/70 px-3 pb-6 backdrop-blur',
+            isMacDesktop ? 'pt-[var(--macos-titlebar-reserve)]' : 'pt-2',
+          )}
+        >
+          <div className="app-no-drag mb-8 flex items-center justify-center">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Link
@@ -116,7 +127,7 @@ export function AppShell({ children }: AppShellProps) {
           <div className="w-full">
             <AppNav compact currentPath={location.pathname} />
           </div>
-          <div className="mt-auto w-full border-t border-border/70 pt-6">
+          <div className="app-no-drag mt-auto w-full border-t border-border/70 pt-6">
             <Tooltip>
               <TooltipTrigger asChild>
                 <ThemeToggleButton
