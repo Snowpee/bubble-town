@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { SessionDetail, SessionSummary } from '@bubble-town/shared';
-import { updateSessionDetail, updateSessionsPayload } from './chat-cache';
+import type { ChatMessage, SessionDetail, SessionSummary } from '@bubble-town/shared';
+import { appendMessagesToSessionDetail, updateSessionDetail, updateSessionsPayload } from './chat-cache';
 
 function createSummary(overrides: Partial<SessionSummary> = {}): SessionSummary {
   return {
@@ -55,6 +55,83 @@ describe('chat cache helpers', () => {
     expect(updateSessionDetail(detail, createSummary({ title: '新标题' }))).toEqual({
       summary: createSummary({ title: '新标题' }),
       messages: [],
+    });
+  });
+
+  it('把完成的流式消息追加到详情缓存并更新 summary', () => {
+    const detail: SessionDetail = {
+      summary: createSummary({ messageCount: 1 }),
+      messages: [
+        {
+          id: 'existing',
+          role: 'user',
+          content: '旧问题',
+          createdAt: '2026-05-16T10:00:00.000Z',
+        },
+      ],
+    };
+    const messages: ChatMessage[] = [
+      {
+        id: 'pending-user',
+        role: 'user',
+        content: '新问题',
+        createdAt: '2026-05-16T10:02:00.000Z',
+      },
+      {
+        id: 'pending-assistant',
+        role: 'assistant',
+        content: '新回答',
+        createdAt: '2026-05-16T10:03:00.000Z',
+      },
+    ];
+
+    expect(appendMessagesToSessionDetail(detail, messages, 'response-next')).toEqual({
+      summary: createSummary({
+        responseId: 'response-next',
+        messageCount: 3,
+        lastMessagePreview: '新回答',
+        updatedAt: '2026-05-16T10:03:00.000Z',
+      }),
+      messages: [...detail.messages, ...messages],
+    });
+  });
+
+  it('已存在相同 id 的流式消息时替换内容而不是追加重复项', () => {
+    const detail: SessionDetail = {
+      summary: createSummary({ messageCount: 2 }),
+      messages: [
+        {
+          id: 'pending-user',
+          role: 'user',
+          content: '新问题',
+          createdAt: '2026-05-16T10:02:00.000Z',
+        },
+        {
+          id: 'pending-assistant',
+          role: 'assistant',
+          content: '半截回答',
+          createdAt: '2026-05-16T10:03:00.000Z',
+        },
+      ],
+    };
+    const messages: ChatMessage[] = [
+      detail.messages[0],
+      {
+        id: 'pending-assistant',
+        role: 'assistant',
+        content: '完整回答',
+        createdAt: '2026-05-16T10:04:00.000Z',
+      },
+    ];
+
+    expect(appendMessagesToSessionDetail(detail, messages, 'response-next')).toEqual({
+      summary: createSummary({
+        responseId: 'response-next',
+        messageCount: 2,
+        lastMessagePreview: '完整回答',
+        updatedAt: '2026-05-16T10:04:00.000Z',
+      }),
+      messages,
     });
   });
 });

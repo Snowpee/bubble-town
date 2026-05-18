@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import type { ChatImageAttachment, ChatMessage as ChatMessageType, SessionDetail, SessionSummary } from '@bubble-town/shared';
+import { DEFAULT_PROFILE_ID, type ChatImageAttachment, type ChatMessage as ChatMessageType, type SessionDetail, type SessionSummary } from '@bubble-town/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Menu, MoreHorizontal, Paperclip, Plus, SendHorizonal, Square, X } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -9,7 +9,7 @@ import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { SessionList } from '@/components/hermes/session-list';
 import { ChatMessage } from '@/components/hermes/chat-message';
 import { ChatComposerSkeleton, ChatThreadSkeleton, LoadingLabel, SessionListSkeleton } from '@/components/loading/loading-state';
-import { updateSessionDetail, updateSessionsPayload } from '@/routes/chat-cache';
+import { appendMessagesToSessionDetail, updateSessionDetail, updateSessionsPayload } from '@/routes/chat-cache';
 import { Button } from '@/components/ui/button';
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer';
 import {
@@ -96,6 +96,7 @@ export function ChatRoute() {
   const activeSessionRef = useRef<string | undefined>(undefined);
   const titleRefreshTimeoutRef = useRef<number | null>(null);
   const titleRefreshTokenRef = useRef(0);
+  const streamingStateRef = useRef<StreamingState | null>(null);
   const navigate = useNavigate();
   const { sessionId: routeSessionId } = useParams<{ sessionId?: string }>();
   const queryClient = useQueryClient();
@@ -173,6 +174,10 @@ export function ChatRoute() {
   }, [activeSessionId]);
 
   useEffect(() => {
+    streamingStateRef.current = streamingState;
+  }, [streamingState]);
+
+  useEffect(() => {
     if (!activeSessionId) {
       logDeleteDebug('active-session-cleared', { routeSessionId });
       setDeleteConfirmOpen(false);
@@ -211,7 +216,13 @@ export function ChatRoute() {
   const shouldShowStreamingState = Boolean(streamingState && (!routeSessionId || streamingState.sessionId === routeSessionId));
   const persistedMessages = (sessionDetailQuery.data?.messages ?? []).filter((message) => message.role !== 'tool');
   const messages = shouldShowStreamingState && streamingState
-    ? [...persistedMessages, streamingState.userMessage, streamingState.assistantMessage]
+    ? [
+        ...persistedMessages.filter(
+          (message) => message.id !== streamingState.userMessage.id && message.id !== streamingState.assistantMessage.id,
+        ),
+        streamingState.userMessage,
+        streamingState.assistantMessage,
+      ]
     : persistedMessages;
   const hasSessions = sessions.length > 0;
   const isSessionListLoading = sessionsQuery.isLoading;
@@ -255,6 +266,40 @@ export function ChatRoute() {
     );
     queryClient.setQueryData<SessionDetail>(['session-detail', profileKey, summary.sessionId], (current) =>
       updateSessionDetail(current, summary),
+    );
+  }
+
+  function seedCompletedStreamingDetail(response: { sessionId: string; responseId?: string }) {
+    const completedState = streamingStateRef.current;
+    if (!completedState || completedState.sessionId !== response.sessionId) {
+      return;
+    }
+
+    const profileKey = activeProfileId;
+    const summary =
+      sessionDetailQuery.data?.summary ??
+      sessions.find((session) => session.sessionId === response.sessionId) ??
+      {
+        sessionId: response.sessionId,
+        conversation: response.sessionId,
+        id: response.sessionId,
+        responseId: response.responseId,
+        profileId: activeProfileId ?? DEFAULT_PROFILE_ID,
+        title: completedState.userMessage.content.trim().slice(0, 64) || '新对话',
+        source: 'api-server',
+        startedAt: completedState.userMessage.createdAt,
+        updatedAt: completedState.assistantMessage.createdAt,
+        messageCount: 0,
+        lastMessagePreview: completedState.assistantMessage.content,
+      };
+
+    const completedMessages = [
+      completedState.userMessage,
+      completedState.assistantMessage,
+    ];
+
+    queryClient.setQueryData<SessionDetail>(['session-detail', profileKey, response.sessionId], (current) =>
+      appendMessagesToSessionDetail(current ?? { summary, messages: persistedMessages }, completedMessages, response.responseId),
     );
   }
 
@@ -506,19 +551,23 @@ export function ChatRoute() {
         returnedResponseId: response.responseId,
         model: response.model,
       });
-      await refreshChatState(response.sessionId);
+      seedCompletedStreamingDetail(response);
+      setStreamingState(null);
+      void refreshChatState(response.sessionId);
       if (!startingSessionId && response.sessionId) {
         scheduleTitleRefresh(response.sessionId);
       }
-      setStreamingState(null);
     } catch (error) {
       if (isAbortError(error)) {
         const abortedSessionId = latestStreamingSessionRef.current;
-        await refreshChatState(abortedSessionId);
+        if (abortedSessionId) {
+          seedCompletedStreamingDetail({ sessionId: abortedSessionId, responseId: streamingStateRef.current?.responseId });
+        }
+        setStreamingState(null);
+        void refreshChatState(abortedSessionId);
         if (!startingSessionId && abortedSessionId) {
           scheduleTitleRefresh(abortedSessionId);
         }
-        setStreamingState(null);
         return;
       }
 
@@ -551,7 +600,7 @@ export function ChatRoute() {
             overlayStyle={{ animationDuration: '0.24s', transitionDuration: '0.24s' }}
             overlayClassName="fixed inset-y-0 left-[var(--sidebar-width)] [animation-duration:240ms] [transition-duration:240ms] lg:hidden"
           >
-            <DrawerHeader className="shrink-0 border-b border-border/70 p-4">
+            <DrawerHeader className="app-drag-region shrink-0 border-b border-border/70 p-4">
               <div className="flex items-center justify-between gap-3">
                 <DrawerTitle>会话列表</DrawerTitle>
                 <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={handleNewConversation}>
@@ -580,7 +629,7 @@ export function ChatRoute() {
           </DrawerContent>
 
           <div className="hidden h-full min-h-0 overflow-hidden border-r border-border/70 bg-background lg:flex lg:flex-col">
-            <div className="flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-6">
+            <div className="app-drag-region flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-6">
               <h2 className="text-base font-semibold tracking-tight">会话列表</h2>
               <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={handleNewConversation}>
                 <Plus className="h-4 w-4" />
@@ -609,7 +658,7 @@ export function ChatRoute() {
           </div>
 
           <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
-            <div className="flex h-16 shrink-0 items-center border-b border-border/70 px-6">
+            <div className="app-drag-region flex h-16 shrink-0 items-center border-b border-border/70 px-6">
               <div className="flex w-full flex-wrap items-center justify-between gap-3 align-center">
                 <div className="flex min-w-0 items-start gap-3">
                   <div className="lg:hidden">
