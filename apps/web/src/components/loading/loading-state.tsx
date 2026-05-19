@@ -15,23 +15,48 @@ export function LoadingLabel({
   );
 }
 
-export function SessionListSkeleton({ className, count = 6 }: { className?: string; count?: number }) {
+export function SessionListSkeleton({
+  className,
+  contentClassName,
+  itemClassName,
+  count = 6,
+  showItemBorder = false,
+  showLastMessagePreview = false,
+  showActions = false,
+}: {
+  className?: string;
+  contentClassName?: string;
+  itemClassName?: string;
+  count?: number;
+  showItemBorder?: boolean;
+  showLastMessagePreview?: boolean;
+  showActions?: boolean;
+}) {
   return (
-    <div className={cn('space-y-2 p-4', className)}>
+    <div className={cn('space-y-2 p-4', className, contentClassName)}>
       {Array.from({ length: count }).map((_, index) => (
-        <div key={index} className="rounded-xl px-4 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 flex-1 space-y-2">
+        <div key={index} className={cn('flex w-full items-start gap-3 rounded-xl px-4 py-3', showItemBorder && 'border border-border/70', itemClassName)}>
+          <div className="min-w-0 flex-1">
+            <div className="space-y-2">
               <Skeleton className="h-4 w-3/4" />
-              <Skeleton className="h-4 w-1/2" />
+              {showLastMessagePreview ? (
+                <>
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-2/3" />
+                </>
+              ) : (
+                <Skeleton className="h-4 w-1/2" />
+              )}
             </div>
-            <Skeleton className="h-5 w-12 rounded-full" />
+            <div className="mt-1 flex items-center gap-2">
+              <Skeleton className="h-3 w-20" />
+              <Skeleton className="h-1 w-1 rounded-full" />
+              <Skeleton className="h-3 w-16" />
+              <Skeleton className="h-1 w-1 rounded-full" />
+              <Skeleton className="h-3 w-10" />
+            </div>
           </div>
-          <div className="mt-3 flex items-center gap-2">
-            <Skeleton className="h-3 w-20" />
-            <Skeleton className="h-1 w-1 rounded-full" />
-            <Skeleton className="h-3 w-16" />
-          </div>
+          {showActions ? <Skeleton className="h-9 w-24 shrink-0 rounded-md" /> : null}
         </div>
       ))}
     </div>

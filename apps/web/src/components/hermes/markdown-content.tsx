@@ -29,9 +29,9 @@ const markdownComponents: Components = {
       </a>
     );
   },
-  p: ({ className, ...props }) => <p {...props} className={cn('mb-3 last:mb-0', className)} />,
-  ul: ({ className, ...props }) => <ul {...props} className={cn('mb-3 list-disc space-y-2 pl-6 last:mb-0', className)} />,
-  ol: ({ className, ...props }) => <ol {...props} className={cn('mb-3 list-decimal space-y-2 pl-6 last:mb-0', className)} />,
+  p: ({ className, ...props }) => <p {...props} className={cn('mb-2 last:mb-0', className)} />,
+  ul: ({ className, ...props }) => <ul {...props} className={cn('mb-2 list-disc space-y-2 pl-4 last:mb-0', className)} />,
+  ol: ({ className, ...props }) => <ol {...props} className={cn('mb-2 list-decimal space-y-2 pl-4 last:mb-0', className)} />,
   li: ({ className, ...props }) => <li {...props} className={cn('', className)} />,
   blockquote: ({ className, ...props }) => (
     <blockquote
@@ -81,7 +81,7 @@ const markdownComponents: Components = {
 
 export function MarkdownContent({ content, className }: MarkdownContentProps) {
   return (
-    <div className={cn('min-w-0 break-words text-inherit', className)}>
+    <div className={cn('min-w-0 break-words text-inherit leading-7', className)}>
       <ReactMarkdown components={markdownComponents} remarkPlugins={[remarkGfm, remarkBreaks]} skipHtml>
         {content}
       </ReactMarkdown>

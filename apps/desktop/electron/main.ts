@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, utilityProcess } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, nativeTheme, utilityProcess } from 'electron';
 import type { UtilityProcess } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -8,10 +8,26 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const companionHost = process.env.ELECTRON_COMPANION_HOST ?? '127.0.0.1';
 const companionPort = Number(process.env.ELECTRON_COMPANION_PORT ?? 3030);
-const macOSTrafficLightPosition = { x: 10, y: 16 };
+const macOSTrafficLightPosition = { x: 16, y: 21 };
 
 let companionProcess: UtilityProcess | null = null;
 let isAppQuitting = false;
+
+ipcMain.handle('bubble-town:set-native-theme-source', (_event, themeSource: unknown) => {
+  if (themeSource !== 'light' && themeSource !== 'dark' && themeSource !== 'system') {
+    return false;
+  }
+
+  nativeTheme.themeSource = themeSource;
+
+  if (process.platform === 'darwin') {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      window.setVibrancy('sidebar', { animationDuration: 120 });
+    });
+  }
+
+  return true;
+});
 
 function getCompanionUrl() {
   return `http://${companionHost}:${companionPort}`;
@@ -89,6 +105,7 @@ async function ensureCompanionServer() {
 
 function createWindow() {
   const isDev = Boolean(process.env.ELECTRON_RENDERER_URL);
+  const isMacOS = process.platform === 'darwin';
   const preloadPath = isDev
     ? path.join(__dirname, 'preload.cjs')
     : path.join(__dirname, '..', 'electron', 'preload.cjs');
@@ -96,19 +113,26 @@ function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
-    minWidth: 1100,
-    minHeight: 760,
-    backgroundColor: '#09090b',
+    minWidth: 360,
+    minHeight: 560,
+    backgroundColor: isMacOS ? '#00000000' : '#09090b',
+    ...(isMacOS
+      ? {
+          transparent: true,
+          vibrancy: 'sidebar' as const,
+          visualEffectState: 'followWindow' as const,
+        }
+      : {}),
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
     },
     titleBarStyle: 'hidden',
-    ...(process.platform === 'darwin' ? { trafficLightPosition: macOSTrafficLightPosition } : {}),
+    ...(isMacOS ? { trafficLightPosition: macOSTrafficLightPosition } : {}),
   });
 
-  if (process.platform === 'darwin') {
+  if (isMacOS) {
     mainWindow.setWindowButtonPosition(macOSTrafficLightPosition);
   }
 

@@ -1,17 +1,16 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { DEFAULT_PROFILE_ID, type ChatImageAttachment, type ChatMessage as ChatMessageType, type SessionDetail, type SessionSummary } from '@bubble-town/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Menu, MoreHorizontal, Paperclip, Plus, SendHorizonal, Square, X } from 'lucide-react';
+import { ArrowUp, ArrowUpToLine, MoreHorizontal, Paperclip, SendHorizonal, Square, X } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { deleteSession as deleteHermesSession, fetchSessionDetail, fetchSessionSummary, fetchSessions, streamChat } from '@/lib/api/hermes';
 import { logProfileDebug } from '@/lib/debug/profile-debug';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
-import { SessionList } from '@/components/hermes/session-list';
 import { ChatMessage } from '@/components/hermes/chat-message';
-import { ChatComposerSkeleton, ChatThreadSkeleton, LoadingLabel, SessionListSkeleton } from '@/components/loading/loading-state';
+import { PageTitlebar } from '@/components/layout/page-titlebar';
+import { ChatComposerSkeleton, ChatThreadSkeleton, LoadingLabel } from '@/components/loading/loading-state';
 import { appendMessagesToSessionDetail, updateSessionDetail, updateSessionsPayload } from '@/routes/chat-cache';
 import { Button } from '@/components/ui/button';
-import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -84,7 +83,6 @@ function readFileAsDataUrl(file: File) {
 export function ChatRoute() {
   const [draft, setDraft] = useState('');
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
-  const [sessionListOpen, setSessionListOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [pendingAttachments, setPendingAttachments] = useState<ChatImageAttachment[]>([]);
   const [streamingState, setStreamingState] = useState<StreamingState | null>(null);
@@ -136,7 +134,7 @@ export function ChatRoute() {
     enabled: Boolean(routeSessionId) && !isStreamingRouteSession,
   });
 
-  const sessions = sessionsQuery.data?.sessions ?? [];
+  const sessions = useMemo(() => sessionsQuery.data?.sessions ?? [], [sessionsQuery.data?.sessions]);
   const activeSessionId = sessionDetailQuery.data?.summary.sessionId ?? routeSessionId;
   const activeResponseId =
     sessionDetailQuery.data?.summary.responseId ??
@@ -185,6 +183,18 @@ export function ChatRoute() {
   }, [activeSessionId, routeSessionId]);
 
   useEffect(() => {
+    if (routeSessionId) {
+      return;
+    }
+
+    abortControllerRef.current?.abort();
+    setStreamingState(null);
+    setPendingAttachments([]);
+    clearScheduledTitleRefresh();
+    latestStreamingSessionRef.current = undefined;
+  }, [routeSessionId]);
+
+  useEffect(() => {
     return () => {
       if (deleteConfirmTimeoutRef.current !== null) {
         window.clearTimeout(deleteConfirmTimeoutRef.current);
@@ -225,18 +235,10 @@ export function ChatRoute() {
       ]
     : persistedMessages;
   const hasSessions = sessions.length > 0;
-  const isSessionListLoading = sessionsQuery.isLoading;
+  const hasActiveSession = Boolean(activeSessionId);
+  const isNewConversationState = !hasActiveSession && messages.length === 0;
+  const emptyConversationVisualOffset = '-translate-y-10 sm:-translate-y-16 lg:-translate-y-24 xl:-translate-y-36';
   const isConversationLoading = Boolean(routeSessionId) && sessionDetailQuery.isLoading && !shouldShowStreamingState;
-
-  function handleSelectSession(sessionId: string) {
-    titleRefreshTokenRef.current += 1;
-    if (titleRefreshTimeoutRef.current !== null) {
-      window.clearTimeout(titleRefreshTimeoutRef.current);
-      titleRefreshTimeoutRef.current = null;
-    }
-    navigate(`/chat/${encodeURIComponent(sessionId)}`);
-    setSessionListOpen(false);
-  }
 
   async function refreshChatState(sessionId?: string) {
     if (sessionId) {
@@ -341,14 +343,82 @@ export function ChatRoute() {
     abortControllerRef.current?.abort();
   }
 
-  function handleNewConversation() {
-    abortControllerRef.current?.abort();
-    setStreamingState(null);
-    setPendingAttachments([]);
-    clearScheduledTitleRefresh();
-    latestStreamingSessionRef.current = undefined;
-    navigate('/chat');
-    setSessionListOpen(false);
+  function renderChatComposer() {
+    return (
+      <div className="mx-auto w-full max-w-3xl px-3 sm:px-0">
+        <div className="rounded-[28px] border border-border/70 bg-secondary/20 shadow-xs transition-colors focus-within:border-ring/60">
+          <input
+            ref={attachmentInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(event) => void handleAttachmentInputChange(event)}
+          />
+          {pendingAttachments.length > 0 ? (
+            <div className="flex flex-wrap gap-3 px-4 pt-4">
+              {pendingAttachments.map((attachment, index) => (
+                <div key={`${attachment.url}-${index}`} className="group relative overflow-hidden rounded-2xl border border-border/70 bg-background/70">
+                  <img
+                    src={attachment.url}
+                    alt={attachment.name ?? `待发送图片 ${index + 1}`}
+                    className="h-20 w-20 object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleRemovePendingAttachment(index)}
+                    className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm transition hover:bg-background"
+                    aria-label={`移除${attachment.name ?? `图片 ${index + 1}`}`}
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <Textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder={activeSessionId ? '继续补充问题，或附上一张图片继续当前会话。' : '输入一条消息，或附上一张图片开始新的对话。'}
+            className="min-h-[2rem] rounded-[22px] border-0 bg-transparent p-4 shadow-none focus-visible:ring-0"
+          />
+          <div className="flex flex-col gap-3 px-2 pb-2 pt-1 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-10 w-10 rounded-full p-0"
+                onClick={() => attachmentInputRef.current?.click()}
+                disabled={streamingState?.status === 'streaming'}
+                aria-label="添加图片附件"
+              >
+                <Paperclip className="h-4 w-4" />
+              </Button>
+              <p className="text-sm text-muted-foreground">
+                {pendingAttachments.length > 0 ? `已添加 ${pendingAttachments.length} 张图片，将随本条消息一起发送。` : ''}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {streamingState?.status === 'streaming' ? (
+                <Button variant="outline" onClick={handleStop} className="rounded-full">
+                  停止生成
+                  <Square className="ml-2 h-4 w-4 fill-current" />
+                </Button>
+              ) : null}
+              <Button
+                variant="default"
+                disabled={streamingState?.status === 'streaming' || (!draft.trim() && pendingAttachments.length === 0)}
+                onClick={() => void handleSend()}
+                className="rounded-full w-10 h-10 p-0"
+              >
+                <ArrowUp className="h-5 w-5" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   function scheduleDeleteConfirmOpen() {
@@ -590,89 +660,13 @@ export function ChatRoute() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
-      <Drawer open={sessionListOpen} onOpenChange={setSessionListOpen} direction="left">
-        <div className="relative grid h-full min-h-0 flex-1 overflow-hidden lg:grid-cols-[320px_minmax(0,1fr)]">
-          <DrawerContent
-            direction="left"
-            portal={false}
-            style={{ animationDuration: '0.24s', transitionDuration: '0.24s' }}
-            className="fixed inset-y-0 left-[var(--sidebar-width)] flex h-screen w-[320px] max-w-[88vw] flex-col [animation-duration:240ms] [transition-duration:240ms] lg:hidden"
-            overlayStyle={{ animationDuration: '0.24s', transitionDuration: '0.24s' }}
-            overlayClassName="fixed inset-y-0 left-[var(--sidebar-width)] [animation-duration:240ms] [transition-duration:240ms] lg:hidden"
-          >
-            <DrawerHeader className="app-drag-region shrink-0 border-b border-border/70 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <DrawerTitle>会话列表</DrawerTitle>
-                <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={handleNewConversation}>
-                  <Plus className="h-4 w-4" />
-                  <span className="ml-2">新建会话</span>
-                </Button>
-              </div>
-            </DrawerHeader>
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
-              {isSessionListLoading ? (
-                <div className="space-y-3">
-                  <LoadingLabel />
-                  <SessionListSkeleton className="min-h-0 flex-1 max-h-none p-0" />
-                </div>
-              ) : (
-                <SessionList
-                  sessions={sessions}
-                  activeSessionId={activeSessionId}
-                  onSelect={handleSelectSession}
-                  className="min-h-0 flex-1 max-h-none p-4"
-                  emptyTitle="当前 profile 还没有会话"
-                  emptyDescription="发送第一条消息后，会话会自动出现在这里。"
-                />
-              )}
-            </div>
-          </DrawerContent>
-
-          <div className="hidden h-full min-h-0 overflow-hidden border-r border-border/70 bg-background lg:flex lg:flex-col">
-            <div className="app-drag-region flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-6">
-              <h2 className="text-base font-semibold tracking-tight">会话列表</h2>
-              <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={handleNewConversation}>
-                <Plus className="h-4 w-4" />
-                <span className="ml-2">新建会话</span>
-              </Button>
-            </div>
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              {isSessionListLoading ? (
-                <div className="space-y-3 p-4">
-                  <LoadingLabel />
-                  <SessionListSkeleton className="min-h-0 flex-1 max-h-none p-0" />
-                </div>
-              ) : (
-                <SessionList
-                  sessions={sessions}
-                  activeSessionId={activeSessionId}
-                  onSelect={handleSelectSession}
-                  className="min-h-0 flex-1 max-h-none p-3"
-                  itemClassName='py-2 px-3'
-                  contentClassName='space-y-1'
-                  emptyTitle="当前 profile 还没有会话"
-                  emptyDescription="发送第一条消息后，会话会自动出现在这里。"
-                />
-              )}
-            </div>
-          </div>
-
+      <div className="relative h-full min-h-0 flex-1 overflow-hidden">
           <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
-            <div className="app-drag-region flex h-16 shrink-0 items-center border-b border-border/70 px-6">
-              <div className="flex w-full flex-wrap items-center justify-between gap-3 align-center">
-                <div className="flex min-w-0 items-start gap-3">
-                  <div className="lg:hidden">
-                    <DrawerTrigger asChild>
-                      <Button variant="outline" size="sm" className="rounded-xl">
-                        <Menu className="h-4 w-4" />
-                      </Button>
-                    </DrawerTrigger>
-                  </div>
-                  <div className="space-y-2">
-                    {isConversationLoading ? <Skeleton className="h-7 w-48" /> : <h2 className="text-lg font-semibold tracking-tight">{activeTitle}</h2>}
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center justify-end gap-2">
+            <PageTitlebar
+              title={isConversationLoading ? <Skeleton className="h-7 w-48" /> : hasActiveSession ? <h2 className="truncate font-semibold tracking-tight">{activeTitle}</h2> : null}
+              titleClassName="flex min-w-0 items-center"
+              actions={
+                <>
                   {isConversationLoading ? <Skeleton className="h-9 w-9 rounded-xl" /> : null}
                   <Popover
                     open={deleteConfirmOpen}
@@ -705,28 +699,30 @@ export function ChatRoute() {
                     >
                       <DropdownMenuTrigger asChild>
                         <PopoverAnchor asChild>
-                          <Button ref={actionsButtonRef} type="button" variant="outline" size="sm" className="rounded-xl">
+                          <Button ref={actionsButtonRef} type="button" variant="ghost" size="sm" className="rounded-xl">
                             <MoreHorizontal className="h-4 w-4" />
                             <span className="sr-only">更多会话操作</span>
                           </Button>
                         </PopoverAnchor>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-44">
-                        <DropdownMenuItem
-                          disabled={!activeSessionId || deleteSessionMutation.isPending || streamingState?.status === 'streaming'}
-                          onSelect={() => {
-                            logDeleteDebug('delete-menu-item-selected', {
-                              activeSessionId,
-                              actionsMenuOpen,
-                              deleteConfirmOpen,
-                            });
-                            setActionsMenuOpen(false);
-                            scheduleDeleteConfirmOpen();
-                          }}
-                          className="text-destructive focus:bg-destructive/10 focus:text-destructive"
-                        >
-                          删除会话
-                        </DropdownMenuItem>
+                      <DropdownMenuContent align="end" className="w-44 border-none ring-1 ring-foreground/5">
+                        {hasActiveSession ? (
+                          <DropdownMenuItem
+                            disabled={deleteSessionMutation.isPending || streamingState?.status === 'streaming'}
+                            onSelect={() => {
+                              logDeleteDebug('delete-menu-item-selected', {
+                                activeSessionId,
+                                actionsMenuOpen,
+                                deleteConfirmOpen,
+                              });
+                              setActionsMenuOpen(false);
+                              scheduleDeleteConfirmOpen();
+                            }}
+                            className="text-destructive focus:bg-destructive/10 focus:text-destructive"
+                          >
+                            删除会话
+                          </DropdownMenuItem>
+                        ) : null}
                         <DropdownMenuSub>
                           <DropdownMenuSubTrigger>消息样式</DropdownMenuSubTrigger>
                           <DropdownMenuSubContent className="w-36">
@@ -802,26 +798,38 @@ export function ChatRoute() {
                       </div>
                     </PopoverContent>
                   </Popover>
-                </div>
-              </div>
-            </div>
+                </>
+              }
+            />
 
             <div className="flex min-h-0 flex-1 flex-col">
-              <div className="min-h-0 flex-1 overflow-y-auto bg-background/30 px-6 py-5">
+              <div className={cn('min-h-0 flex-1 overflow-y-auto bg-background/30 px-6 py-5', isNewConversationState && 'flex items-center')}>
                 {isConversationLoading ? (
                   <div className="space-y-4">
                     <LoadingLabel className="mx-auto w-full max-w-3xl" />
                     <ChatThreadSkeleton />
                   </div>
+                ) : isNewConversationState ? (
+                  <div className={cn('mx-auto flex w-full max-w-3xl flex-col items-center gap-8 transition-transform duration-100 ease-out', emptyConversationVisualOffset)}>
+                    <div className="w-full max-w-md space-y-2 text-center">
+                      <div className="text-2xl text-foreground">{hasSessions ? '开始新会话' : '开始一段新的对话'}</div>
+                      <p className="mx-auto max-w-[30ch] break-words text-sm leading-6 text-muted-foreground sm:max-w-md">
+                        {hasSessions
+                          ? null
+                          : '输入框会直接在当前 profile 下创建新会话，并把 assistant 的内容按流式增量写到界面。'}
+                      </p>
+                    </div>
+                    {renderChatComposer()}
+                  </div>
                 ) : (
                   <div className={cn('mx-auto flex w-full max-w-3xl flex-col gap-4')}>
                     {messages.length === 0 ? (
-                    <div className="flex min-h-[360px] items-center justify-center rounded-3xl px-6 text-center">
-                      <div className="max-w-md space-y-2">
-                        <div className="text-lg font-medium text-foreground">{hasSessions && !activeSessionId ? '开始新会话' : '开始一段新的对话'}</div>
-                        <p className="text-sm leading-6 text-muted-foreground">
+                    <div className={cn('flex min-h-[360px] items-center justify-center rounded-3xl px-4 text-center transition-transform duration-100 ease-out', emptyConversationVisualOffset)}>
+                      <div className="w-full max-w-md space-y-2">
+                        <div className="text-2xl text-foreground">{hasSessions && !activeSessionId ? '开始新会话' : '开始一段新的对话'}</div>
+                        <p className="mx-auto max-w-[30ch] break-words text-sm leading-6 text-muted-foreground sm:max-w-md">
                           {hasSessions && !activeSessionId
-                            ? '发送消息开始新会话。或者，点击会话列表以继续之前的会话'
+                            ? null
                             : '输入框会直接在当前 profile 下创建新会话，并把 assistant 的内容按流式增量写到界面。'}
                         </p>
                       </div>
@@ -840,92 +848,21 @@ export function ChatRoute() {
                 )}
               </div>
 
-              <div className="shrink-0 bg-transparent pb-5 pt-2">
-                {isConversationLoading ? (
-                  <div className="space-y-3">
-                    <LoadingLabel className="mx-auto max-w-3xl" />
-                    <ChatComposerSkeleton />
-                  </div>
-                ) : (
-                  <div className="mx-auto max-w-3xl">
-                    <div className="rounded-[28px] border border-border/70 bg-secondary/20 shadow-xs transition-colors focus-within:border-ring/60">
-                      <input
-                        ref={attachmentInputRef}
-                        type="file"
-                        accept="image/*"
-                        multiple
-                        className="hidden"
-                        onChange={(event) => void handleAttachmentInputChange(event)}
-                      />
-                      {pendingAttachments.length > 0 ? (
-                        <div className="flex flex-wrap gap-3 px-4 pt-4">
-                          {pendingAttachments.map((attachment, index) => (
-                            <div key={`${attachment.url}-${index}`} className="group relative overflow-hidden rounded-2xl border border-border/70 bg-background/70">
-                              <img
-                                src={attachment.url}
-                                alt={attachment.name ?? `待发送图片 ${index + 1}`}
-                                className="h-20 w-20 object-cover"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => handleRemovePendingAttachment(index)}
-                                className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm transition hover:bg-background"
-                                aria-label={`移除${attachment.name ?? `图片 ${index + 1}`}`}
-                              >
-                                <X className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                      <Textarea
-                        value={draft}
-                        onChange={(event) => setDraft(event.target.value)}
-                        placeholder={activeSessionId ? '继续补充问题，或附上一张图片继续当前会话。' : '输入一条消息，或附上一张图片开始新的对话。'}
-                        className="min-h-[2rem] rounded-[22px] border-0 bg-transparent p-4 shadow-none focus-visible:ring-0"
-                      />
-                      <div className="flex flex-col gap-3 px-2 pb-2 pt-1 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="flex items-center gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-10 w-10 rounded-full p-0"
-                            onClick={() => attachmentInputRef.current?.click()}
-                            disabled={streamingState?.status === 'streaming'}
-                            aria-label="添加图片附件"
-                          >
-                            <Paperclip className="h-4 w-4" />
-                          </Button>
-                          <p className="text-sm text-muted-foreground">
-                            {pendingAttachments.length > 0 ? `已添加 ${pendingAttachments.length} 张图片，将随本条消息一起发送。` : ''}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {streamingState?.status === 'streaming' ? (
-                            <Button variant="outline" onClick={handleStop} className="rounded-full">
-                              停止生成
-                              <Square className="ml-2 h-4 w-4 fill-current" />
-                            </Button>
-                          ) : null}
-                          <Button
-                            disabled={streamingState?.status === 'streaming' || (!draft.trim() && pendingAttachments.length === 0)}
-                            onClick={() => void handleSend()}
-                            className="rounded-full"
-                          >
-                            {streamingState?.status === 'streaming' ? '生成中...' : '发送消息'}
-                            <SendHorizonal className="ml-2 h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
+              {isNewConversationState ? null : (
+                <div className="shrink-0 bg-transparent pb-5 pt-2">
+                  {isConversationLoading ? (
+                    <div className="space-y-3">
+                      <LoadingLabel className="mx-auto max-w-3xl" />
+                      <ChatComposerSkeleton />
                     </div>
-                  </div>
-                )}
-              </div>
+                  ) : (
+                    renderChatComposer()
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
-      </Drawer>
     </div>
   );
 }

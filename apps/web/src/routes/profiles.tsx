@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MoreHorizontal, Plus } from 'lucide-react';
 import { DEFAULT_PROFILE_ID, type ProfileSummary, type ProfilesResponse } from '@bubble-town/shared';
+import { PageTitlebar } from '@/components/layout/page-titlebar';
 import { LoadingLabel, ProfileGridSkeleton } from '@/components/loading/loading-state';
 import { createProfile, deleteProfile, fetchProfiles, renameProfile, switchProfile } from '@/lib/api/profiles';
 import { markActiveProfileInResponse } from '@/lib/api/profile-cache';
@@ -9,7 +10,6 @@ import { logProfileDebug } from '@/lib/debug/profile-debug';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -134,13 +134,15 @@ export function ProfilesRoute() {
   return (
     <>
       <div>
-        <div className="app-drag-region flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-6">
-          <h2 className="text-base font-semibold tracking-tight">Profile 管理</h2>
+        <PageTitlebar
+          title={<h2 className="truncate text-base font-semibold tracking-tight">Profile 管理</h2>}
+          actions={
           <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={openCreateDialog}>
             <Plus className="h-4 w-4" />
             <span className="ml-2">新建 Profile</span>
           </Button>
-        </div>
+          }
+        />
         <div className="space-y-4 p-4 lg:p-6">
           {isLoading ? (
             <>

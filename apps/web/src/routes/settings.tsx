@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_PROFILE_ID, type ProfilesResponse } from '@bubble-town/shared';
 import { fetchHealth } from '@/lib/api/hermes';
+import { PageTitlebar } from '@/components/layout/page-titlebar';
 import { LoadingLabel, SettingsPanelSkeleton, StatusCardSkeleton } from '@/components/loading/loading-state';
 import { markActiveProfileInResponse } from '@/lib/api/profile-cache';
 import { fetchProfiles, switchProfile } from '@/lib/api/profiles';
 import { logProfileDebug } from '@/lib/debug/profile-debug';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { StatusCard } from '@/components/hermes/status-card';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
@@ -57,9 +57,7 @@ export function SettingsRoute() {
 
   return (
     <div className="flex flex-col overflow-hidden h-full min-h-0">
-        <div className="app-drag-region flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-6">
-          <h2 className="text-base font-semibold tracking-tight">连接与健康设置</h2>
-        </div>
+        <PageTitlebar title={<h2 className="truncate text-base font-semibold tracking-tight">连接与健康设置</h2>} />
         <div className='p-4 lg:p-6 space-y-4 overflow-auto h-full'>
           <Tabs defaultValue="health" className="space-y-1">
             <TabsList>

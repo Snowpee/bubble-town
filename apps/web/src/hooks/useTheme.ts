@@ -15,6 +15,7 @@ export function useTheme() {
     document.documentElement.classList.remove('light', 'dark');
     document.documentElement.classList.add(theme);
     localStorage.setItem('theme', theme);
+    void window.bubbleTownDesktop?.setNativeThemeSource?.(theme);
   }, [theme]);
 
   const toggleTheme = () => {

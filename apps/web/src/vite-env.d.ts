@@ -5,6 +5,8 @@ interface BubbleTownDesktopBridge {
   versions: Record<string, string>;
   companionUrl: string;
   titlebarReserve?: string;
+  titlebarControlReserve?: string;
+  setNativeThemeSource?: (themeSource: 'light' | 'dark' | 'system') => Promise<boolean>;
 }
 
 interface Window {

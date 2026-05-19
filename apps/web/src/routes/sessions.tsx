@@ -1,15 +1,14 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckSquare, Eye, Plus, Trash2, X } from 'lucide-react';
+import { CheckSquare, Eye, Trash2, X } from 'lucide-react';
 import { deleteSession, fetchSessions } from '@/lib/api/hermes';
+import { PageTitlebar } from '@/components/layout/page-titlebar';
 import { LoadingLabel, SessionListSkeleton } from '@/components/loading/loading-state';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { SessionList } from '@/components/hermes/session-list';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -77,15 +76,8 @@ export function SessionsRoute() {
   );
   const selectedVisibleCount = filteredSessions.filter((session) => selectedSessionIds.has(session.sessionId)).length;
   const allFilteredSelected = filteredSessions.length > 0 && selectedVisibleCount === filteredSessions.length;
-  const hasFilters = normalizedQuery.length > 0 || sourceFilter !== 'all' || summaryFilter !== 'all';
   const isLoading = sessionsQuery.isLoading;
   const isDeleting = deleteSessionsMutation.isPending;
-
-  function resetFilters() {
-    setQuery('');
-    setSourceFilter('all');
-    setSummaryFilter('all');
-  }
 
   function toggleSessionSelection(sessionId: string) {
     setSelectedSessionIds((current) => {
@@ -141,34 +133,33 @@ export function SessionsRoute() {
 
   return (
     <div className="flex flex-col overflow-hidden h-full min-h-0">
-      <div className="app-drag-region flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-6">
-        <h2 className="text-base font-semibold tracking-tight">会话</h2>
-      </div>
-      <div className='p4 lg:p-6 space-y-4 overflow-auto h-full'>
+      <PageTitlebar title={<h2 className="truncate text-base font-semibold tracking-tight">会话</h2>} />
+      <div className="h-full space-y-4 overflow-auto p-4 lg:p-6">
       {isLoading ? (
         <div className="space-y-4">
           <LoadingLabel />
-          <Card>
-            <CardHeader className="space-y-3">
-              <CardTitle>会话筛选</CardTitle>
-              <CardDescription>正在加载会话索引与筛选条件。</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-3 lg:grid-cols-[minmax(0,1.6fr)_220px_220px]">
-                <Skeleton className="h-10 w-full rounded-md" />
-                <Skeleton className="h-10 w-full rounded-md" />
-                <Skeleton className="h-10 w-full rounded-md" />
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Skeleton className="h-4 w-36" />
-                <Skeleton className="h-1 w-1 rounded-full" />
-                <Skeleton className="h-4 w-28" />
-                <Skeleton className="h-1 w-1 rounded-full" />
-                <Skeleton className="h-4 w-20" />
-              </div>
-            </CardContent>
-          </Card>
-          <SessionListSkeleton className="p-0" count={8} />
+          <div className="grid gap-3 lg:grid-cols-[132px_minmax(0,1.6fr)_220px_220px]">
+            <Skeleton className="h-10 w-full rounded-md" />
+            <Skeleton className="h-10 w-full rounded-md" />
+            <Skeleton className="h-10 w-full rounded-md" />
+            <Skeleton className="h-10 w-full rounded-md" />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-1 w-1 rounded-full" />
+            <Skeleton className="h-4 w-32" />
+            <Skeleton className="h-1 w-1 rounded-full" />
+            <Skeleton className="h-4 w-20" />
+          </div>
+          <SessionListSkeleton
+            className="max-h-none p-0"
+            contentClassName="space-y-2"
+            itemClassName="p-4"
+            count={8}
+            showItemBorder
+            showLastMessagePreview
+            showActions
+          />
         </div>
       ) : (
         <>
