@@ -56,14 +56,12 @@ export function SettingsRoute() {
   const isProfilesLoading = profilesQuery.isLoading;
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>连接与健康设置</CardTitle>
-          <CardDescription>当前显示的是 companion 健康检查骨架结果，后续会替换为真实的 Hermes 环境探测。</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Tabs defaultValue="health" className="space-y-4">
+    <div className="flex flex-col overflow-hidden h-full min-h-0">
+        <div className="app-drag-region flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-6">
+          <h2 className="text-base font-semibold tracking-tight">连接与健康设置</h2>
+        </div>
+        <div className='p-4 lg:p-6 space-y-4 overflow-auto h-full'>
+          <Tabs defaultValue="health" className="space-y-1">
             <TabsList>
               <TabsTrigger value="health">健康检查</TabsTrigger>
               <TabsTrigger value="env">环境配置</TabsTrigger>
@@ -148,8 +146,7 @@ export function SettingsRoute() {
               )}
             </TabsContent>
           </Tabs>
-        </CardContent>
-      </Card>
+        </div>
     </div>
   );
 }

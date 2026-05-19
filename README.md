@@ -38,7 +38,7 @@ bubble-town/
 
 ### Requirements
 
-- Node.js 20+
+- Node.js 22.12+
 - npm 10+
 
 ### Install
@@ -98,6 +98,9 @@ When the app is opened through a LAN address, the frontend automatically calls t
 | `npm run test` | Run workspace tests |
 | `npm run build` | Build all workspaces |
 | `npm run package:desktop` | Build and package the desktop app |
+| `npm run package:dir -w @bubble-town/desktop` | Package a local macOS `.app` directory with ad-hoc signing |
+| `npm run package:zip -w @bubble-town/desktop` | Package a macOS arm64 `.zip` with ad-hoc signing |
+| `npm run package:dmg -w @bubble-town/desktop` | Package a macOS arm64 `.dmg` with ad-hoc signing |
 | `npm run release:desktop:dry-run` | Preview the macOS desktop GitHub Release command |
 | `npm run release:desktop` | Build and publish macOS arm64 + x64 desktop Releases via GitHub CLI |
 
@@ -126,6 +129,7 @@ npm run package:desktop
 ```
 
 The packaged output is written to `apps/desktop/release` by default.
+For faster local checks, use `npm run package:dir -w @bubble-town/desktop`.
 
 ## Publishing the macOS Desktop App
 

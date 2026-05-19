@@ -38,7 +38,7 @@ bubble-town/
 
 ### 运行要求
 
-- Node.js 20+
+- Node.js 22.12+
 - npm 10+
 
 ### 安装依赖
@@ -98,6 +98,9 @@ http://192.168.1.23:5173/
 | `npm run test` | 运行工作区测试 |
 | `npm run build` | 构建全部工作区 |
 | `npm run package:desktop` | 构建并打包桌面应用 |
+| `npm run package:dir -w @bubble-town/desktop` | 使用 ad-hoc 签名生成本地 macOS `.app` 目录 |
+| `npm run package:zip -w @bubble-town/desktop` | 使用 ad-hoc 签名生成 macOS arm64 `.zip` |
+| `npm run package:dmg -w @bubble-town/desktop` | 使用 ad-hoc 签名生成 macOS arm64 `.dmg` |
 | `npm run release:desktop:dry-run` | 预览 macOS 桌面版 GitHub Release 发布命令 |
 | `npm run release:desktop` | 构建 macOS arm64 + x64 桌面版并通过 GitHub CLI 发布 Release |
 
@@ -126,6 +129,7 @@ npm run package:desktop
 ```
 
 打包产物默认输出到 `apps/desktop/release`。
+本地快速验证可使用 `npm run package:dir -w @bubble-town/desktop`。
 
 ## 发布 macOS 桌面版
 

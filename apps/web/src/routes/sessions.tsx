@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckSquare, Eye, Trash2, X } from 'lucide-react';
+import { CheckSquare, Eye, Plus, Trash2, X } from 'lucide-react';
 import { deleteSession, fetchSessions } from '@/lib/api/hermes';
 import { LoadingLabel, SessionListSkeleton } from '@/components/loading/loading-state';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
@@ -140,20 +140,11 @@ export function SessionsRoute() {
   }
 
   return (
-    <div className="space-y-6">
-      <section className="flex flex-col gap-3 lg:flex-row items-center lg:justify-between">
-        <div className="space-y-2">
-          <h2 className="text-xl font-semibold tracking-tight">会话</h2>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary">{isLoading ? '加载中' : `${sessions.length} 个会话`}</Badge>
-          <Badge variant="secondary">{isLoading ? '加载中' : `${filteredSessions.length} 个结果`}</Badge>
-          <Button asChild>
-            <Link to="/chat">前往聊天页</Link>
-          </Button>
-        </div>
-      </section>
-
+    <div className="flex flex-col overflow-hidden h-full min-h-0">
+      <div className="app-drag-region flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-6">
+        <h2 className="text-base font-semibold tracking-tight">会话</h2>
+      </div>
+      <div className='p4 lg:p-6 space-y-4 overflow-auto h-full'>
       {isLoading ? (
         <div className="space-y-4">
           <LoadingLabel />
@@ -181,14 +172,6 @@ export function SessionsRoute() {
         </div>
       ) : (
         <>
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-            {hasFilters ? (
-              <Button variant="outline" onClick={resetFilters}>
-                清空筛选
-              </Button>
-            ) : null}
-          </div>
-
           <div className="grid gap-3 lg:grid-cols-[132px_minmax(0,1.6fr)_220px_220px]">
             {bulkManageOpen ? (
               <Button type="button" variant="outline" onClick={exitBulkManage} disabled={isDeleting} className="w-full">
@@ -340,5 +323,6 @@ export function SessionsRoute() {
         </>
       )}
     </div>
+  </div>
   );
 }

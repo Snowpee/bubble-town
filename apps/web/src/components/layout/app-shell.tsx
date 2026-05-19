@@ -146,7 +146,7 @@ export function AppShell({ children }: AppShellProps) {
           <div
             className={cn(
               'flex min-h-0 flex-1 flex-col',
-              isChatRoute ? 'overflow-hidden' : 'overflow-y-auto px-6 py-8 lg:px-8',
+              isChatRoute ? 'overflow-hidden' : 'overflow-y-auto',
             )}
           >
             {children}

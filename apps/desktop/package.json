@@ -3,23 +3,26 @@
   "private": true,
   "version": "1.0.3",
   "description": "Bubble Town desktop shell",
+  "author": "Weizhou <code@zwz.im>",
   "type": "module",
   "main": "dist/main.js",
   "scripts": {
     "dev": "ELECTRON_RENDERER_URL=http://localhost:5173 ELECTRON_COMPANION_URL=http://127.0.0.1:3030 electron ./electron/main.cjs",
     "check": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
-    "package": "electron-builder",
-    "package:dir": "electron-builder --dir"
+    "package": "electron-builder -c.mac.identity=-",
+    "package:dir": "electron-builder --dir --arm64 -c.mac.identity=-",
+    "package:zip": "electron-builder --mac zip --arm64 -c.mac.identity=-",
+    "package:dmg": "electron-builder --mac dmg --arm64 -c.mac.identity=-"
   },
   "dependencies": {
-    "@fastify/cors": "^10.0.2",
     "@bubble-town/shared": "file:../../packages/shared",
+    "@fastify/cors": "^10.0.2",
     "fastify": "^5.3.3"
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
-    "electron": "35.1.5",
+    "electron": "42.1.0",
     "electron-builder": "^26.0.12",
     "tsx": "^4.19.4",
     "typescript": "~5.8.3"
@@ -56,7 +59,7 @@
       ],
       "category": "public.app-category.productivity"
     },
-    "electronVersion": "35.1.5",
+    "electronVersion": "42.1.0",
     "npmRebuild": false
   }
 }

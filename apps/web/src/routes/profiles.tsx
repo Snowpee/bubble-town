@@ -134,16 +134,14 @@ export function ProfilesRoute() {
   return (
     <>
       <div>
-        <div className="flex flex-row items-center justify-between gap-4 mb-4">
-          <div className="space-y-2">
-            <h2 className="text-xl font-semibold tracking-tight">Profile 管理</h2>
-          </div>
-          <Button onClick={openCreateDialog}>
-            <Plus className="mr-2 h-4 w-4" />
-            新建 Profile
+        <div className="app-drag-region flex h-16 shrink-0 items-center justify-between gap-3 border-b border-border/70 px-6">
+          <h2 className="text-base font-semibold tracking-tight">Profile 管理</h2>
+          <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={openCreateDialog}>
+            <Plus className="h-4 w-4" />
+            <span className="ml-2">新建 Profile</span>
           </Button>
         </div>
-        <div className="space-y-4">
+        <div className="space-y-4 p-4 lg:p-6">
           {isLoading ? (
             <>
               <LoadingLabel />
