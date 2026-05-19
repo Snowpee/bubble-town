@@ -45,6 +45,7 @@ export function acquireCompanionLock(port: number, host: string): void {
     );
   }
 
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   fs.writeFileSync(
     lockPath,
     `${JSON.stringify(

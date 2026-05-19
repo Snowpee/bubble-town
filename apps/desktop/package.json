@@ -1,7 +1,7 @@
 {
   "name": "@bubble-town/desktop",
   "private": true,
-  "version": "1.0.3",
+  "version": "1.0.5",
   "description": "Bubble Town desktop shell",
   "author": "Weizhou <code@zwz.im>",
   "type": "module",

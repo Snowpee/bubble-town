@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { Navigate, Route, BrowserRouter as Router, Routes } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/app-shell';
 import { fetchProfiles } from '@/lib/api/profiles';
@@ -24,6 +24,8 @@ export default function App() {
       setActiveProfileId(profilesQuery.data.activeProfileId);
     }
   }, [activeProfileId, profilesQuery.data?.activeProfileId, setActiveProfileId]);
+
+  const Router = window.location.protocol === 'file:' ? HashRouter : BrowserRouter;
 
   return (
     <Router>

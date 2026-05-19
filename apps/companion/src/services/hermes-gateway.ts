@@ -56,9 +56,34 @@ const gatewayReadyIntervalMs = Number(process.env.BUBBLE_TOWN_HERMES_READY_INTER
 const gatewayStopTimeoutMs = Number(process.env.BUBBLE_TOWN_HERMES_STOP_TIMEOUT_MS ?? 5_000);
 const maxLogLines = 80;
 const generatedGatewayApiKey = randomBytes(32).toString('hex');
+const extraPathEntries = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
 
 function getManagedGatewayApiKey(): string {
   return process.env.BUBBLE_TOWN_HERMES_API_KEY || generatedGatewayApiKey;
+}
+
+function getHermesBinaryPath(): string {
+  if (process.env.HERMES_BINARY) {
+    return process.env.HERMES_BINARY;
+  }
+
+  const home = process.env.HOME;
+  const candidates = [
+    home ? `${home}/.local/bin/hermes` : undefined,
+    '/opt/homebrew/bin/hermes',
+    '/usr/local/bin/hermes',
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? 'hermes';
+}
+
+function buildPathEnv(basePath: string | undefined): string {
+  const home = process.env.HOME;
+  const entries = [home ? `${home}/.local/bin` : undefined, basePath, ...extraPathEntries].filter(
+    (entry): entry is string => Boolean(entry),
+  );
+
+  return [...new Set(entries.flatMap((entry) => entry.split(':')).filter(Boolean))].join(':');
 }
 
 function buildGatewayEnv(profileId: string, port: number): NodeJS.ProcessEnv {
@@ -76,6 +101,7 @@ function buildGatewayEnv(profileId: string, port: number): NodeJS.ProcessEnv {
 
   return {
     ...baseEnv,
+    PATH: buildPathEnv(baseEnv.PATH),
     HERMES_HOME: profileHome,
     API_SERVER_ENABLED: 'true',
     API_SERVER_HOST: defaultGatewayHost,
@@ -86,7 +112,7 @@ function buildGatewayEnv(profileId: string, port: number): NodeJS.ProcessEnv {
 }
 
 let gatewaySpawner: GatewaySpawner = ({ profileId, port }) => {
-  const child = spawn(process.env.HERMES_BINARY ?? 'hermes', ['gateway', 'run', '--replace', '--accept-hooks'], {
+  const child = spawn(getHermesBinaryPath(), ['gateway', 'run', '--replace', '--accept-hooks'], {
     env: buildGatewayEnv(profileId, port),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -155,6 +181,7 @@ function attachGatewayLogs(profileId: string, child: HermesGatewayChildProcess):
   child.stderr.setEncoding('utf8');
   child.stdout.on('data', (chunk: string) => appendGatewayLog(profileId, '[stdout] ', chunk));
   child.stderr.on('data', (chunk: string) => appendGatewayLog(profileId, '[stderr] ', chunk));
+  child.on('error', (error) => appendGatewayLog(profileId, '[error] ', error.message));
 }
 
 function trackGatewayExit(profileId: string, child: HermesGatewayChildProcess): Promise<number | null> {
@@ -377,7 +404,7 @@ export function setHermesGatewaySpawnerForTests(spawner: GatewaySpawner): void {
 
 export function resetHermesGatewaySpawnerForTests(): void {
   gatewaySpawner = ({ profileId, port }) => {
-    const child = spawn(process.env.HERMES_BINARY ?? 'hermes', ['gateway', 'run', '--replace', '--accept-hooks'], {
+    const child = spawn(getHermesBinaryPath(), ['gateway', 'run', '--replace', '--accept-hooks'], {
       env: buildGatewayEnv(profileId, port),
       stdio: ['ignore', 'pipe', 'pipe'],
     });

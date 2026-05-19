@@ -1,6 +1,5 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
-import { pathToFileURL } from 'node:url';
 import { registerChatRoutes } from './routes/chat.js';
 import { registerConfigRoutes } from './routes/config.js';
 import { registerHealthRoutes } from './routes/health.js';
@@ -62,16 +61,4 @@ export async function startCompanionServer(options: CompanionServerOptions = {})
     );
   }
   return app;
-}
-
-function isExecutedDirectly() {
-  const entryArg = process.argv[1];
-  return Boolean(entryArg) && import.meta.url === pathToFileURL(entryArg).href;
-}
-
-if (isExecutedDirectly()) {
-  startCompanionServer().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
 }
