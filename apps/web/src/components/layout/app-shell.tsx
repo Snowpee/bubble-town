@@ -178,8 +178,10 @@ export function AppShell({ children }: AppShellProps) {
     setMobileSidebarOpen(false);
   }
 
-  function handleSidebarResizePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+  function handleSidebarResizePointerDown(event: ReactPointerEvent<HTMLElement>) {
     event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
     sidebarResizeStartRef.current = {
       pointerX: event.clientX,
       width: clampSidebarWidth(sidebarWidth),
@@ -219,7 +221,7 @@ export function AppShell({ children }: AppShellProps) {
     <aside
       className={cn(
         'group/sidebar relative flex min-h-0 w-[19rem] shrink-0 flex-col text-sidebar-foreground transition-[left,width,opacity] duration-150 ease-out [bottom:0] [left:var(--mobile-sidebar-left)] [top:var(--mobile-sidebar-top)] md:bottom-auto md:left-auto md:top-auto md:h-full md:w-[var(--sidebar-width)]',
-        isMacDesktop ? 'macos-sidebar-surface' : 'bg-sidebar',
+        isMacDesktop ? 'max-md:bg-sidebar/90 max-md:backdrop-blur-xl max-md:backdrop-saturate-150' : 'bg-sidebar',
         collapsed ? 'md:w-0 md:overflow-hidden md:border-r-0 md:opacity-0' : 'md:opacity-100',
         'fixed z-40 shadow-2xl md:static md:shadow-none',
       )}
@@ -231,7 +233,7 @@ export function AppShell({ children }: AppShellProps) {
       <div className={cn(
         'flex shrink-0 items-center gap-2 px-3 pb-3 h-14 pt-3 border-border/50',
         'app-drag-region',
-        isMacDesktop && 'max-md:hidden',
+        isMacDesktop && 'max-md:hidden md:border-none mt-1',
         !collapsed && 'md:border-r',
         )}>
         <Link
@@ -271,9 +273,14 @@ export function AppShell({ children }: AppShellProps) {
           <ChevronLeft className="h-4 w-4" />
         </Button>
       </div>
-      <div className={cn('flex min-h-0 flex-1 flex-col border-border/50', !collapsed && 'md:border-r')}>
+      <div className={cn(
+        'flex min-h-0 flex-1 flex-col border-border/50', 
+        isMacDesktop && 'md:border-none',
+        !collapsed && 'md:border-r'
+        )}
+      >
         <nav className={cn(
-          "app-no-drag shrink-0 space-y-1 px-3",
+          "app-no-drag shrink-0 space-y-0.5 px-2",
           isMacDesktop ? null : 'pt-3'
           )}>
           {mainActions.map((item) => {
@@ -286,7 +293,7 @@ export function AppShell({ children }: AppShellProps) {
                 onClick={closeMobileSidebar}
                 aria-current={isActive ? 'page' : undefined}
                 className={cn(
-                  'flex h-10 items-center rounded-lg text-sm text-sidebar-foreground/80 transition hover:bg-sidebar-accent-foreground/4 hover:text-sidebar-accent-foreground',
+                  'flex h-9 items-center rounded-lg text-sm text-sidebar-foreground/80 transition hover:bg-sidebar-accent-foreground/4 hover:text-sidebar-accent-foreground',
                   'gap-2 px-3',
                   isActive && 'bg-sidebar-accent-foreground/5 text-sidebar-accent-foreground',
                 )}
@@ -305,7 +312,7 @@ export function AppShell({ children }: AppShellProps) {
                 type="button"
                 variant="ghost"
                 className={cn(
-                  'h-10 w-full rounded-lg text-sm text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                  'h-10 w-full rounded-lg text-sm text-sidebar-foreground/80 hover:bg-sidebar-accent-foreground/4 hover:text-sidebar-accent-foreground',
                   'justify-start gap-2 px-3',
                 )}
               >
@@ -313,7 +320,7 @@ export function AppShell({ children }: AppShellProps) {
                 <span>更多</span>
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" side="bottom" className="w-64 border-none ring-1 ring-foreground/5">
+            <DropdownMenuContent align="start" side="bottom" className="w-64 p-2 border-none ring-1 ring-foreground/5">
               <DropdownMenuItem asChild>
                 <Link to="/sessions" onClick={closeMobileSidebar}>
                   <History className="mr-2 h-4 w-4" />
@@ -336,9 +343,9 @@ export function AppShell({ children }: AppShellProps) {
           </DropdownMenu>
         </nav>
 
-        <div className="app-no-drag min-h-0 flex-1 overflow-hidden px-3 py-4">
-          <div className="mb-2 px-3 text-xs font-medium text-sidebar-foreground/60">最近</div>
-          <div className="h-full min-h-0 overflow-y-auto pr-1">
+        <div className="app-no-drag min-h-0 flex-1 overflow-hidden py-4">
+          <div className="mb-2 px-5 text-xs font-medium text-sidebar-foreground/60">最近</div>
+          <div className="h-full min-h-0 overflow-y-auto px-2">
             {sessionsQuery.isLoading ? (
               <div className="space-y-2 px-2">
                 {Array.from({ length: 8 }).map((_, index) => (
@@ -373,7 +380,7 @@ export function AppShell({ children }: AppShellProps) {
           </div>
         </div>
 
-        <div className="app-no-drag mt-auto flex shrink-0 flex-row gap-2 p-3">
+        <div className="app-no-drag mt-auto flex shrink-0 flex-row gap-2 p-2">
           <div className="order-1">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -390,7 +397,6 @@ export function AppShell({ children }: AppShellProps) {
                   </span>
                   <span className="min-w-0 flex-1 text-left">
                     <span className="block truncate text-sm font-medium">{activeProfile?.name ?? activeProfileId ?? 'Profile'}</span>
-                    <span className="block truncate text-xs text-sidebar-foreground/55">个人账户</span>
                   </span>
                 </Button>
               </DropdownMenuTrigger>
@@ -434,23 +440,24 @@ export function AppShell({ children }: AppShellProps) {
         </div>
       </div>
       {!collapsed ? (
-        <button
-          type="button"
+        <div
+          role="separator"
+          tabIndex={0}
           aria-label="拖动调整侧边栏宽度"
           aria-orientation="vertical"
-          className="app-no-drag absolute inset-y-0 right-[-4px] z-20 hidden w-2 cursor-col-resize touch-none md:block"
+          className="app-no-drag absolute inset-y-0 right-0 z-20 hidden w-2 translate-x-1/2 cursor-col-resize touch-none md:block"
           onPointerDown={handleSidebarResizePointerDown}
           onDoubleClick={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
         >
           <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover/sidebar:bg-border hover:bg-ring" />
-        </button>
+        </div>
       ) : null}
     </aside>
   );
 
   return (
     <div
-      className={cn('flex h-dvh overflow-hidden text-foreground', isMacDesktop ? 'bg-transparent' : 'bg-background')}
+      className={cn('flex h-dvh overflow-hidden text-foreground', isMacDesktop ? 'macos-root-mask' : 'bg-background')}
       style={{
         ['--sidebar-width' as string]: visibleSidebarWidth,
         ['--macos-titlebar-reserve' as string]: macOSTitlebarReserve,
@@ -467,7 +474,11 @@ export function AppShell({ children }: AppShellProps) {
         onClick={closeMobileSidebar}
       />
       {sidebar}
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+      <main className={cn(
+        "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background",
+        isMacDesktop ? 'm-1 rounded-[14px] shadow-xs' : null,
+        )}
+        >
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
       </main>
     </div>

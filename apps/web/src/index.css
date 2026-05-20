@@ -35,7 +35,6 @@
   --sidebar-accent-foreground: oklch(32.109% 0.00004 271.152);
   --sidebar-border: oklch(0.9276 0.0058 264.5313);
   --sidebar-ring: oklch(78.952% 0.09246 218.218);
-  --sidebar-vibrancy-mask: rgb(255 255 255 / 0.36);
   --font-sans: Inter, sans-serif;
   --font-serif: Source Serif 4, serif;
   --font-mono: JetBrains Mono, monospace;
@@ -59,7 +58,7 @@
 }
 
 .dark {
-  --background: oklch(0.2046 0 0);
+  --background: oklch(25% 0 198.112);
   --foreground: oklch(0.9219 0 0);
   --card: oklch(0.2686 0 0);
   --card-foreground: oklch(0.9219 0 0);
@@ -83,7 +82,7 @@
   --chart-3: oklch(0.5461 0.2152 262.8809);
   --chart-4: oklch(0.4882 0.2172 264.3763);
   --chart-5: oklch(0.4244 0.1809 265.6377);
-  --sidebar: oklch(0.2046 0 0);
+  --sidebar: oklch(25% 0 198.112);
   --sidebar-foreground: oklch(0.9219 0 0);
   --sidebar-primary: oklch(0.6231 0.1880 259.8145);
   --sidebar-primary-foreground: oklch(1.0000 0 0);
@@ -91,7 +90,6 @@
   --sidebar-accent-foreground: oklch(0.8823 0.0571 254.1284);
   --sidebar-border: oklch(0.3715 0 0);
   --sidebar-ring: oklch(0.6231 0.1880 259.8145);
-  --sidebar-vibrancy-mask: rgb(16 16 16 / 0.34);
   --font-sans: Inter, sans-serif;
   --font-serif: Source Serif 4, serif;
   --font-mono: JetBrains Mono, monospace;
@@ -172,30 +170,37 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+@theme {
+  --root-vibrancy-mask: color-mix(in oklch, var(--sidebar) 20%, transparent);
+}
+/* :root {
+  --root-vibrancy-mask: rgba(231, 231, 255, 0.2);
+  --root-vibrancy-mask: color-mix(in oklch, var(--sidebar) 20%, transparent);
+}
+.dark {
+  --root-vibrancy-mask: rgb(16 16 16 / 0.34);
+} */
 
+/* ======== custom ======== */
+
+@layer base {
+  html,
+  body,
+  #root {
+    min-width: 0;
+    width: 100%;
+    height: 100%;
+    overflow-x: hidden;
+  }
   html.macos-desktop-vibrancy,
   html.macos-desktop-vibrancy body {
     background: transparent;
   }
 }
-
 @layer utilities {
-  .bg-sidebar-vibrancy-mask {
-    background: var(--sidebar-vibrancy-mask);
-  }
-
-  .macos-sidebar-surface {
-    background: color-mix(in oklab, var(--sidebar) 82%, transparent);
-    -webkit-backdrop-filter: blur(18px) saturate(1.35);
-    backdrop-filter: blur(18px) saturate(1.35);
-  }
-
-  @media (min-width: 768px) {
-    .macos-sidebar-surface {
-      background: var(--sidebar-vibrancy-mask);
-      -webkit-backdrop-filter: none;
-      backdrop-filter: none;
-    }
+  .macos-root-mask {
+    background: var(--root-vibrancy-mask);
   }
 
   .activity-status-line {
