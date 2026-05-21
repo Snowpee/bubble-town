@@ -4,12 +4,14 @@ import { DEFAULT_PROFILE_ID } from '@bubble-town/shared';
 
 interface WorkspaceState {
   activeProfileId: string;
+  activeStorylineId?: string;
   chatMode: 'responses' | 'chat-completions';
   assistantMessageViewMode: 'bubble' | 'document';
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   mobileSidebarOpen: boolean;
   setActiveProfileId: (profileId: string) => void;
+  setActiveStorylineId: (storylineId?: string) => void;
   setChatMode: (chatMode: 'responses' | 'chat-completions') => void;
   setAssistantMessageViewMode: (viewMode: 'bubble' | 'document') => void;
   setSidebarCollapsed: (sidebarCollapsed: boolean) => void;
@@ -31,12 +33,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
     (set) => ({
       activeProfileId: DEFAULT_PROFILE_ID,
+      activeStorylineId: undefined,
       chatMode: 'responses',
       assistantMessageViewMode: 'bubble',
       sidebarCollapsed: false,
       sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
       mobileSidebarOpen: false,
       setActiveProfileId: (activeProfileId) => set({ activeProfileId }),
+      setActiveStorylineId: (activeStorylineId) => set({ activeStorylineId }),
       setChatMode: (chatMode) => set({ chatMode }),
       setAssistantMessageViewMode: (assistantMessageViewMode) => set({ assistantMessageViewMode }),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
@@ -57,10 +61,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             typeof persistedState.activeProfileId === 'string' && persistedState.activeProfileId.trim()
               ? persistedState.activeProfileId
               : DEFAULT_PROFILE_ID,
+          activeStorylineId:
+            typeof persistedState.activeStorylineId === 'string' && persistedState.activeStorylineId.trim()
+              ? persistedState.activeStorylineId
+              : undefined,
         };
       },
       partialize: (state) => ({
         activeProfileId: state.activeProfileId,
+        activeStorylineId: state.activeStorylineId,
         chatMode: state.chatMode,
         assistantMessageViewMode: state.assistantMessageViewMode,
         sidebarCollapsed: state.sidebarCollapsed,

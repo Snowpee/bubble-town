@@ -1,42 +1,27 @@
-import { useEffect } from 'react';
 import { BrowserRouter, HashRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
 import { AppShell } from '@/components/layout/app-shell';
-import { fetchProfiles } from '@/lib/api/profiles';
-import { logProfileDebug } from '@/lib/debug/profile-debug';
-import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { ChatRoute } from '@/routes/chat';
+import Home from '@/pages/Home';
 import { ProfilesRoute } from '@/routes/profiles';
 import { SessionsRoute } from '@/routes/sessions';
 import { SettingsRoute } from '@/routes/settings';
+import { StoryChatRoute } from '@/routes/story-chat';
 
 export default function App() {
-  const profilesQuery = useQuery({ queryKey: ['profiles'], queryFn: fetchProfiles });
-  const activeProfileId = useWorkspaceStore((state) => state.activeProfileId);
-  const setActiveProfileId = useWorkspaceStore((state) => state.setActiveProfileId);
-
-  useEffect(() => {
-    if (profilesQuery.data?.activeProfileId && profilesQuery.data.activeProfileId !== activeProfileId) {
-      logProfileDebug('app-sync-active-profile-from-server', {
-        previousActiveProfileId: activeProfileId,
-        serverActiveProfileId: profilesQuery.data.activeProfileId,
-      });
-      setActiveProfileId(profilesQuery.data.activeProfileId);
-    }
-  }, [activeProfileId, profilesQuery.data?.activeProfileId, setActiveProfileId]);
-
   const Router = window.location.protocol === 'file:' ? HashRouter : BrowserRouter;
 
   return (
     <Router>
       <AppShell>
         <Routes>
-          <Route path="/" element={<Navigate to="/chat" replace />} />
-          <Route path="/chat" element={<ChatRoute />} />
-          <Route path="/chat/:sessionId" element={<ChatRoute />} />
+          <Route path="/" element={<Home />} />
+          <Route path="/chat" element={<StoryChatRoute />} />
+          <Route path="/legacy-chat" element={<ChatRoute />} />
+          <Route path="/legacy-chat/:sessionId" element={<ChatRoute />} />
           <Route path="/sessions" element={<SessionsRoute />} />
           <Route path="/profiles" element={<ProfilesRoute />} />
           <Route path="/settings" element={<SettingsRoute />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </AppShell>
     </Router>

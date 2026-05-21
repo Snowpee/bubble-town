@@ -1,10 +1,12 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { registerChatRoutes } from './routes/chat.js';
+import { registerCharacterRoutes } from './routes/characters.js';
 import { registerConfigRoutes } from './routes/config.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerProfileRoutes } from './routes/profiles.js';
 import { registerSessionRoutes } from './routes/sessions.js';
+import { registerStorylineRoutes } from './routes/storylines.js';
 import { ensureManagedHermesGateway, stopManagedHermesGateway } from './services/hermes-gateway.js';
 import { getActiveProfileId } from './services/profile-store.js';
 import { acquireCompanionLock, releaseCompanionLock } from './services/companion-lock.js';
@@ -25,6 +27,8 @@ export async function createCompanionServer() {
   await registerConfigRoutes(app);
   await registerProfileRoutes(app);
   await registerSessionRoutes(app);
+  await registerCharacterRoutes(app);
+  await registerStorylineRoutes(app);
   await registerChatRoutes(app);
 
   app.addHook('onClose', async () => {
