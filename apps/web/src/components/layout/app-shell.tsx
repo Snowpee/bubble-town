@@ -33,7 +33,7 @@ export function AppShell({ children }: AppShellProps) {
         style={getCompanionThemeStyle(companionTheme)}
         className={cn(
           'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background',
-          isMacDesktop ? 'm-1 rounded-[14px] shadow-xs' : null,
+          isMacDesktop ? '' : null,
         )}
       >
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>

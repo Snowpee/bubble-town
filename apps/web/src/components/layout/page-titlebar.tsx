@@ -28,49 +28,10 @@ export function PageTitlebar({ title, actions, className, titleClassName }: Page
         className,
       )}
     >
-      <div className="relative flex min-w-0 flex-1 items-center">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="app-no-drag mr-2 h-9 w-9 shrink-0 rounded-lg p-0 md:hidden"
-          onClick={() => setMobileSidebarOpen(!mobileSidebarOpen)}
-          aria-label={mobileSidebarOpen ? '关闭侧边栏菜单' : '打开侧边栏菜单'}
-        >
-          {mobileSidebarOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
-        </Button>
-        <div
-          aria-hidden={!sidebarCollapsed}
-          className={cn(
-            'app-no-drag pointer-events-none absolute left-0 hidden items-center gap-1 opacity-0 transition-[opacity,transform] duration-200 ease-out md:flex',
-            sidebarCollapsed && 'pointer-events-auto translate-x-0 opacity-100 delay-100',
-            !sidebarCollapsed && '-translate-x-1',
-          )}
-        >
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            tabIndex={sidebarCollapsed ? 0 : -1}
-            className="h-9 w-9 shrink-0 rounded-lg p-0"
-            onClick={() => setSidebarCollapsed(false)}
-            aria-label="展开侧边栏"
-          >
-            <PanelLeftOpen className="h-4 w-4" />
-          </Button>
-          <Button
-            asChild
-            variant="ghost"
-            size="sm"
-            className="h-9 w-9 shrink-0 rounded-lg p-0"
-            aria-label="新建会话"
-          >
-            <Link to="/chat" tabIndex={sidebarCollapsed ? 0 : -1}>
-              <MessageSquarePlus className="h-4 w-4" />
-              <span className="sr-only">新建会话</span>
-            </Link>
-          </Button>
-        </div>
+      <div className={cn(
+        "relative flex min-w-0 flex-1 items-center",
+        isMacDesktop && 'ml-20',
+        )}>
         <div
           className={cn(
             'min-w-0 text-sm font-semibold tracking-tight transition-[padding] duration-150 ease-out md:text-base',

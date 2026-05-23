@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { DEFAULT_PROFILE_ID, type ChatImageAttachment, type ChatMessage as ChatMessageType, type SessionDetail, type SessionSummary } from '@bubble-town/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowUp, ArrowUpToLine, MoreHorizontal, Paperclip, SendHorizonal, Square, X } from 'lucide-react';
+import { ArrowUp, MoreHorizontal, Paperclip, Square, X } from 'lucide-react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { deleteSession as deleteHermesSession, fetchSessionDetail, fetchSessionSummary, fetchSessions, streamChat } from '@/lib/api/hermes';
 import { logProfileDebug } from '@/lib/debug/profile-debug';
@@ -87,6 +87,9 @@ export function ChatRoute() {
   const [pendingAttachments, setPendingAttachments] = useState<ChatImageAttachment[]>([]);
   const [streamingState, setStreamingState] = useState<StreamingState | null>(null);
   const actionsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const autoScrollRef = useRef(true);
+  const programmaticScrollRef = useRef(false);
   const attachmentInputRef = useRef<HTMLInputElement | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const deleteConfirmTimeoutRef = useRef<number | null>(null);
@@ -239,6 +242,50 @@ export function ChatRoute() {
   const isNewConversationState = !hasActiveSession && messages.length === 0;
   const emptyConversationVisualOffset = '-translate-y-10 sm:-translate-y-16 lg:-translate-y-24 xl:-translate-y-36';
   const isConversationLoading = Boolean(routeSessionId) && sessionDetailQuery.isLoading && !shouldShowStreamingState;
+  const messageFingerprint = messages.map((message) => `${message.id}:${message.content.length}:${message.toolEvents?.length ?? 0}`).join('|');
+
+  function scrollChatToBottom(behavior: ScrollBehavior = 'smooth') {
+    const scrollContainer = chatScrollRef.current;
+    if (!scrollContainer) {
+      return;
+    }
+
+    programmaticScrollRef.current = true;
+    scrollContainer.scrollTo({ top: scrollContainer.scrollHeight, behavior });
+    window.setTimeout(() => {
+      programmaticScrollRef.current = false;
+    }, 120);
+  }
+
+  function handleChatScroll() {
+    const scrollContainer = chatScrollRef.current;
+    if (!scrollContainer || programmaticScrollRef.current) {
+      return;
+    }
+
+    const distanceToBottom = scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight;
+    autoScrollRef.current = distanceToBottom < 80;
+  }
+
+  useEffect(() => {
+    autoScrollRef.current = true;
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    if (isNewConversationState || isConversationLoading) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => scrollChatToBottom('auto'));
+  }, [activeSessionId, isConversationLoading, isNewConversationState]);
+
+  useEffect(() => {
+    if (isNewConversationState || isConversationLoading || !autoScrollRef.current) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => scrollChatToBottom('smooth'));
+  }, [isConversationLoading, isNewConversationState, messageFingerprint]);
 
   async function refreshChatState(sessionId?: string) {
     if (sessionId) {
@@ -345,7 +392,7 @@ export function ChatRoute() {
 
   function renderChatComposer() {
     return (
-      <div className="mx-auto w-full max-w-3xl px-3 sm:px-0">
+      <div className="mx-auto w-full max-w-3xl px-3">
         <div className="rounded-[28px] border border-border/70 bg-secondary/20 shadow-xs transition-colors focus-within:border-ring/60">
           <input
             ref={attachmentInputRef}
@@ -529,6 +576,7 @@ export function ChatRoute() {
     });
     abortControllerRef.current = abortController;
     latestStreamingSessionRef.current = requestSessionId;
+    autoScrollRef.current = true;
     clearScheduledTitleRefresh();
 
     setStreamingState({
@@ -803,7 +851,11 @@ export function ChatRoute() {
             />
 
             <div className="flex min-h-0 flex-1 flex-col">
-              <div className={cn('min-h-0 flex-1 overflow-y-auto bg-background/30 px-6 py-5', isNewConversationState && 'flex items-center')}>
+              <div
+                ref={chatScrollRef}
+                onScroll={handleChatScroll}
+                className={cn('min-h-0 flex-1 overflow-y-auto bg-background/30 px-6 py-5', isNewConversationState && 'flex items-center')}
+              >
                 {isConversationLoading ? (
                   <div className="space-y-4">
                     <LoadingLabel className="mx-auto w-full max-w-3xl" />

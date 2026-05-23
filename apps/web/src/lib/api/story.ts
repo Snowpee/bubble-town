@@ -10,7 +10,10 @@ import type {
   CreateMemoryRequest,
   CreateStorylineRequest,
   CreateSuppressedMemoryRequest,
+  CorrectMemoryRequest,
+  CorrectMemoryResponse,
   MemoriesResponse,
+  MemoryConsolidationResult,
   MemoryRecord,
   ProfileContinuityValidationResponse,
   RelativeTimeSearchResponse,
@@ -24,6 +27,7 @@ import type {
   UpdateCharacterRequest,
   UpdateMemoryRequest,
   UpdateStorylineRequest,
+  WorldStateDebugTrace,
 } from '@bubble-town/shared';
 import { apiDelete, apiGet, apiPatch, apiPost, COMPANION_URL } from './client';
 import type {
@@ -34,6 +38,44 @@ import type {
   ChatStreamStartEvent,
   ChatStreamToolProgressEvent,
 } from '@bubble-town/shared';
+
+function logWorldStateDebugTrace(trace: WorldStateDebugTrace | undefined, context: {
+  source: 'send' | 'stream';
+  storylineId: string;
+  responseId?: string;
+}) {
+  if (!trace) {
+    return;
+  }
+
+  console.groupCollapsed(`[BubbleTown][WorldState][${context.source}] storyline=${context.storylineId}`);
+  console.debug('processingStatus', trace.processingStatus);
+  console.debug('processingPath', trace.processingPath ?? null);
+  console.debug('rejectDecision', trace.rejectDecision ?? null);
+  console.debug('gatingRequest', trace.gatingRequest ?? null);
+  console.debug('gatingResponse', trace.gatingResponse ?? null);
+  console.debug('llmRequest', trace.llmRequest ?? null);
+  console.debug('llmResponse', trace.llmResponse ?? null);
+  console.debug('updated', trace.updated);
+  console.debug('applyResults', trace.applyResults);
+  console.debug('sceneProjectionBefore', trace.sceneProjectionBefore ?? null);
+  console.debug('sceneProjectionAfter', trace.sceneProjectionAfter ?? null);
+  console.debug('skippedReason', trace.skippedReason ?? null);
+  console.debug('error', trace.error ?? null);
+  console.debug('responseId', context.responseId ?? null);
+  console.groupEnd();
+}
+
+function logContextPreviewWorldState(response: ContextPreviewResponse, storylineId: string, input?: string) {
+  console.groupCollapsed(`[BubbleTown][WorldState][preview] storyline=${storylineId}`);
+  console.debug('input', input ?? null);
+  console.debug('sceneProjection', response.contextPack.sceneProjection ?? null);
+  console.debug('recentMessages', response.contextPack.recentMessages);
+  if (response.worldStateDebug) {
+    console.debug('latestWorldStateDebug', response.worldStateDebug);
+  }
+  console.groupEnd();
+}
 
 export function fetchCharacters() {
   return apiGet<CharactersResponse>('/api/characters');
@@ -76,11 +118,23 @@ export function archiveStoryline(id: string) {
 }
 
 export function previewContextPack(storylineId: string, input?: string) {
-  return apiPost<ContextPreviewResponse>('/api/context/preview', { storylineId, input });
+  return apiPost<ContextPreviewResponse>('/api/context/preview', { storylineId, input })
+    .then((response) => {
+      logContextPreviewWorldState(response, storylineId, input);
+      return response;
+    });
 }
 
 export function sendStorylineChat(request: StorylineChatRequest) {
-  return apiPost<StorylineChatResponse>(`/api/storylines/${encodeURIComponent(request.storylineId)}/chat/respond`, request);
+  return apiPost<StorylineChatResponse>(`/api/storylines/${encodeURIComponent(request.storylineId)}/chat/respond`, request)
+    .then((response) => {
+      logWorldStateDebugTrace(response.worldStateDebug, {
+        source: 'send',
+        storylineId: response.storylineId,
+        responseId: response.responseId,
+      });
+      return response;
+    });
 }
 
 export function fetchStorylineMemories(storylineId: string) {
@@ -105,6 +159,14 @@ export function deleteMemory(id: string) {
 
 export function restoreMemory(id: string) {
   return apiPost<MemoryRecord>(`/api/memories/${encodeURIComponent(id)}/restore`, {});
+}
+
+export function correctMemory(id: string, request: CorrectMemoryRequest) {
+  return apiPost<CorrectMemoryResponse>(`/api/memories/${encodeURIComponent(id)}/correct`, request);
+}
+
+export function consolidateStorylineMemory(storylineId: string, activityLimit?: number) {
+  return apiPost<MemoryConsolidationResult>(`/api/storylines/${encodeURIComponent(storylineId)}/memory/consolidate`, { activityLimit });
 }
 
 export function fetchSuppressedMemories(storylineId: string) {
@@ -157,7 +219,7 @@ interface StreamStorylineChatOptions {
 
 function processSseEvent(
   rawEvent: string,
-  state: { sessionId?: string; responseId?: string; model: string; output: string; runtimeSessionId?: string },
+  state: { sessionId?: string; responseId?: string; model: string; output: string; runtimeSessionId?: string; worldStateDebug?: WorldStateDebugTrace },
   handlers: StreamStorylineChatHandlers,
 ) {
   const lines = rawEvent.split('\n').filter(Boolean);
@@ -198,10 +260,11 @@ function processSseEvent(
   }
 
   if (eventName === 'message-complete') {
-    const payload = JSON.parse(rawData) as ChatStreamCompleteEvent & { runtimeSessionId?: string };
+    const payload = JSON.parse(rawData) as ChatStreamCompleteEvent & { runtimeSessionId?: string; worldStateDebug?: WorldStateDebugTrace };
     state.sessionId = payload.sessionId || payload.conversation || state.sessionId;
     state.responseId = payload.responseId || state.responseId;
     state.runtimeSessionId = payload.runtimeSessionId || state.runtimeSessionId;
+    state.worldStateDebug = payload.worldStateDebug || state.worldStateDebug;
     state.model = payload.model || state.model;
     state.output = payload.output || state.output;
     handlers.onComplete?.(payload as ChatStreamCompleteEvent & { storylineId: string; runtimeSessionId: string });
@@ -249,6 +312,7 @@ export async function streamStorylineChat(
     sessionId: undefined as string | undefined,
     responseId: undefined as string | undefined,
     runtimeSessionId: undefined as string | undefined,
+    worldStateDebug: undefined as WorldStateDebugTrace | undefined,
     model: 'hermes-agent',
     output: '',
   };
@@ -277,6 +341,12 @@ export async function streamStorylineChat(
     processSseEvent(buffer, state, handlers);
   }
 
+  logWorldStateDebugTrace(state.worldStateDebug, {
+    source: 'stream',
+    storylineId: request.storylineId,
+    responseId: state.responseId,
+  });
+
   return {
     sessionId: state.sessionId ?? '',
     conversation: state.sessionId ?? '',
@@ -286,5 +356,6 @@ export async function streamStorylineChat(
     model: state.model,
     storylineId: request.storylineId,
     runtimeSessionId: state.runtimeSessionId,
+    ...(state.worldStateDebug ? { worldStateDebug: state.worldStateDebug } : {}),
   };
 }

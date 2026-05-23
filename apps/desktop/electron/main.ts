@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, Menu, nativeTheme } from 'electron';
+import type { MenuItemConstructorOptions } from 'electron';
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
@@ -378,6 +379,8 @@ function createWindow() {
     mainWindow.setWindowButtonPosition(macOSTrafficLightPosition);
   }
 
+  registerWindowContextMenu(mainWindow, isDev);
+
   mainWindow.on('close', () => saveWindowState(mainWindow));
 
   if (isDev && process.env.ELECTRON_RENDERER_URL) {
@@ -386,6 +389,43 @@ function createWindow() {
   } else {
     void mainWindow.loadFile(webIndexPath);
   }
+}
+
+function registerWindowContextMenu(window: BrowserWindow, isDev: boolean) {
+  window.webContents.on('context-menu', (_event, params) => {
+    const template: MenuItemConstructorOptions[] = [];
+
+    if (params.isEditable) {
+      template.push(
+        { role: 'undo', enabled: params.editFlags.canUndo },
+        { role: 'redo', enabled: params.editFlags.canRedo },
+        { type: 'separator' },
+        { role: 'cut', enabled: params.editFlags.canCut },
+        { role: 'copy', enabled: params.editFlags.canCopy },
+        { role: 'paste', enabled: params.editFlags.canPaste },
+        { role: 'selectAll', enabled: params.editFlags.canSelectAll },
+      );
+    } else {
+      template.push(
+        { role: 'copy', enabled: params.selectionText.trim().length > 0 },
+        { role: 'selectAll' },
+      );
+    }
+
+    if (isDev) {
+      template.push(
+        { type: 'separator' },
+        {
+          label: 'Inspect Element',
+          click: () => {
+            window.webContents.inspectElement(params.x, params.y);
+          },
+        },
+      );
+    }
+
+    Menu.buildFromTemplate(template).popup({ window });
+  });
 }
 
 app.whenReady().then(async () => {
@@ -405,6 +445,18 @@ app.whenReady().then(async () => {
 
   const menu = Menu.buildFromTemplate([
     { label: 'Bubble Town', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }] },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
     { label: 'View', submenu: [{ role: 'reload' }, { role: 'toggleDevTools' }] },
     { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'zoom' }] },
   ]);

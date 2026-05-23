@@ -4,6 +4,7 @@ import {
   type PrepareProfileForStorylineResponse,
   type ProfileSummary,
   type ProfilesResponse,
+  type ResetProfileForStorylineResponse,
   type UpdateProfileRequest,
 } from '@bubble-town/shared';
 import type { SessionSummary } from '@bubble-town/shared';
@@ -33,4 +34,10 @@ export function deleteProfile(profileId: string) {
 
 export function prepareProfileForStoryline(profileId: string) {
   return apiPost<PrepareProfileForStorylineResponse>(`/api/profiles/${profileId || DEFAULT_PROFILE_ID}/prepare-storyline`, {});
+}
+
+export function resetProfileForStoryline(profileId: string, confirmationProfileName: string) {
+  return apiPost<ResetProfileForStorylineResponse>(`/api/profiles/${profileId || DEFAULT_PROFILE_ID}/reset-storyline`, {
+    confirmationProfileName,
+  });
 }
