@@ -31,3 +31,22 @@ export interface PrepareProfileForStorylineResponse {
   soulPath: string;
   changes: string[];
 }
+
+export interface ResetProfileRuntimeSummary {
+  storylineIds: string[];
+  removedStorylineCount: number;
+  removedRuntimeSessionCount: number;
+  removedMemoryCount: number;
+  removedSuppressedMemoryCount: number;
+  removedActivityLogCount: number;
+  removedCharacterCount: number;
+  removedEmbeddingCount: number;
+}
+
+export interface ResetProfileForStorylineResponse {
+  profileId: string;
+  configPath: string;
+  soulPath: string;
+  changes: string[];
+  runtimeReset: ResetProfileRuntimeSummary;
+}

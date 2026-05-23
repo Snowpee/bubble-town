@@ -199,6 +199,7 @@ export function createStoryline(input: CreateStorylineRequest): Storyline {
     hermesProfileId,
     title,
     description: input.description?.trim() || undefined,
+    currentSceneId: input.currentSceneId?.trim() || 'default_scene',
     createdAt: now,
     updatedAt: now,
     status: 'active',
@@ -226,6 +227,7 @@ export function updateStoryline(id: string, input: UpdateStorylineRequest): Stor
     ...current,
     title: input.title?.trim() || current.title,
     description: input.description === undefined ? current.description : input.description.trim() || undefined,
+    currentSceneId: input.currentSceneId === undefined ? current.currentSceneId : input.currentSceneId.trim() || 'default_scene',
     status: nextStatus,
     updatedAt: nowIso(),
   };
@@ -374,6 +376,9 @@ export function listMemoryRecords(storylineId: string, characterId: string): Mem
     if (memory.status !== 'active') {
       return false;
     }
+    if (memory.supersededBy || isExpiredMemory(memory)) {
+      return false;
+    }
     if (memory.scope === 'character') {
       return memory.characterId === characterId;
     }
@@ -389,6 +394,10 @@ export function listAllMemoryRecords(storylineId: string): MemoryRecord[] {
     .memoryRecords
     .filter((memory) => memory.storylineId === storylineId)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export function getMemoryRecord(id: string): MemoryRecord | undefined {
+  return readData().memoryRecords.find((memory) => memory.id === id);
 }
 
 export function createMemoryRecord(storylineId: string, input: CreateMemoryRequest): MemoryRecord {
@@ -421,12 +430,15 @@ export function createMemoryRecord(storylineId: string, input: CreateMemoryReque
     sourceMessageIds: input.sourceMessageIds,
     supersedes: input.supersedes,
     supersededBy: input.supersededBy,
+    sourceActivityIds: input.sourceActivityIds,
     lastAccessedAt: input.lastAccessedAt,
     accessCount: input.accessCount,
+    expiresAt: input.expiresAt,
     embeddingRef: input.embeddingRef,
     embeddingModel: input.embeddingModel,
     embeddingText: input.embeddingText,
     embeddingUpdatedAt: input.embeddingUpdatedAt,
+    worldState: input.worldState,
   };
   data.memoryRecords.push(memory);
   writeData(data);
@@ -454,16 +466,55 @@ export function updateMemoryRecord(id: string, input: UpdateMemoryRequest): Memo
     sourceMessageIds: input.sourceMessageIds ?? current.sourceMessageIds,
     supersedes: input.supersedes ?? current.supersedes,
     supersededBy: input.supersededBy ?? current.supersededBy,
+    sourceActivityIds: input.sourceActivityIds ?? current.sourceActivityIds,
     lastAccessedAt: input.lastAccessedAt ?? current.lastAccessedAt,
     accessCount: input.accessCount ?? current.accessCount,
+    expiresAt: input.expiresAt ?? current.expiresAt,
     embeddingRef: input.embeddingRef ?? current.embeddingRef,
     embeddingModel: input.embeddingModel ?? current.embeddingModel,
     embeddingText: input.embeddingText ?? current.embeddingText,
     embeddingUpdatedAt: input.embeddingUpdatedAt ?? current.embeddingUpdatedAt,
+    worldState: input.worldState ?? current.worldState,
     updatedAt: nowIso(),
   };
   data.memoryRecords[index] = updated;
   writeData(data);
+  return updated;
+}
+
+function isExpiredMemory(memory: MemoryRecord, now = Date.now()): boolean {
+  if (!memory.expiresAt) {
+    return false;
+  }
+  const expiresAt = new Date(memory.expiresAt).getTime();
+  return !Number.isNaN(expiresAt) && expiresAt <= now;
+}
+
+export function markMemoryRecordsAccessed(ids: string[], at = nowIso()): MemoryRecord[] {
+  const uniqueIds = Array.from(new Set(ids));
+  if (uniqueIds.length === 0) {
+    return [];
+  }
+
+  const data = readData();
+  const updated: MemoryRecord[] = [];
+  for (const id of uniqueIds) {
+    const index = data.memoryRecords.findIndex((memory) => memory.id === id);
+    if (index === -1) {
+      continue;
+    }
+    const current = data.memoryRecords[index]!;
+    const next = {
+      ...current,
+      lastAccessedAt: at,
+      accessCount: (current.accessCount ?? 0) + 1,
+    };
+    data.memoryRecords[index] = next;
+    updated.push(next);
+  }
+  if (updated.length > 0) {
+    writeData(data);
+  }
   return updated;
 }
 
@@ -598,4 +649,88 @@ export function resetStoryRuntimeForTests(): void {
   if (fs.existsSync(storePath)) {
     fs.unlinkSync(storePath);
   }
+}
+
+export function resetProfileRuntimeState(profileId: string): {
+  storylineIds: string[];
+  removedStorylineCount: number;
+  removedRuntimeSessionCount: number;
+  removedMemoryCount: number;
+  removedSuppressedMemoryCount: number;
+  removedActivityLogCount: number;
+  removedCharacterCount: number;
+} {
+  const targetProfileId = profileId.trim();
+  if (!targetProfileId) {
+    return {
+      storylineIds: [],
+      removedStorylineCount: 0,
+      removedRuntimeSessionCount: 0,
+      removedMemoryCount: 0,
+      removedSuppressedMemoryCount: 0,
+      removedActivityLogCount: 0,
+      removedCharacterCount: 0,
+    };
+  }
+
+  const data = readData();
+  const storylineIds = data.storylines
+    .filter((storyline) => storyline.hermesProfileId === targetProfileId)
+    .map((storyline) => storyline.id);
+  const storylineIdSet = new Set(storylineIds);
+  const characterIds = data.storylines
+    .filter((storyline) => storylineIdSet.has(storyline.id))
+    .map((storyline) => storyline.characterId);
+  const characterIdSet = new Set(characterIds);
+
+  const nextStorylines = data.storylines.filter((storyline) => !storylineIdSet.has(storyline.id));
+  const nextRuntimeSessions = data.runtimeSessions.filter((session) => (
+    session.hermesProfileId !== targetProfileId && !storylineIdSet.has(session.storylineId)
+  ));
+  const nextMemoryRecords = data.memoryRecords.filter((memory) => !storylineIdSet.has(memory.storylineId ?? ''));
+  const nextSuppressedMemories = data.suppressedMemories.filter((memory) => !storylineIdSet.has(memory.storylineId ?? ''));
+  const nextActivityLogs = data.activityLogs.filter((activityLog) => !storylineIdSet.has(activityLog.storylineId));
+  const usedCharacterIds = new Set(nextStorylines.map((storyline) => storyline.characterId));
+  const nextCharacters = data.characters.filter((character) => !characterIdSet.has(character.id) || usedCharacterIds.has(character.id));
+  const nextActiveStorylineId = data.activeStorylineId && storylineIdSet.has(data.activeStorylineId)
+    ? undefined
+    : data.activeStorylineId;
+
+  const removedStorylineCount = data.storylines.length - nextStorylines.length;
+  const removedRuntimeSessionCount = data.runtimeSessions.length - nextRuntimeSessions.length;
+  const removedMemoryCount = data.memoryRecords.length - nextMemoryRecords.length;
+  const removedSuppressedMemoryCount = data.suppressedMemories.length - nextSuppressedMemories.length;
+  const removedActivityLogCount = data.activityLogs.length - nextActivityLogs.length;
+  const removedCharacterCount = data.characters.length - nextCharacters.length;
+
+  if (
+    removedStorylineCount > 0
+    || removedRuntimeSessionCount > 0
+    || removedMemoryCount > 0
+    || removedSuppressedMemoryCount > 0
+    || removedActivityLogCount > 0
+    || removedCharacterCount > 0
+    || nextActiveStorylineId !== data.activeStorylineId
+  ) {
+    writeData({
+      ...data,
+      activeStorylineId: nextActiveStorylineId,
+      characters: nextCharacters,
+      storylines: nextStorylines,
+      runtimeSessions: nextRuntimeSessions,
+      memoryRecords: nextMemoryRecords,
+      suppressedMemories: nextSuppressedMemories,
+      activityLogs: nextActivityLogs,
+    });
+  }
+
+  return {
+    storylineIds,
+    removedStorylineCount,
+    removedRuntimeSessionCount,
+    removedMemoryCount,
+    removedSuppressedMemoryCount,
+    removedActivityLogCount,
+    removedCharacterCount,
+  };
 }

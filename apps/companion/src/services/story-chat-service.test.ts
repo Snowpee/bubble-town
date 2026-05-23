@@ -38,6 +38,36 @@ test('sendStorylineChat 解析 Storyline profile 并写入 RuntimeSession', asyn
     const payload = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
     fetchCalls.push({ url: String(input), payload });
 
+    if (payload.text && typeof payload.text === 'object') {
+      const schemaName = String(
+        (payload.text as { format?: { name?: string } }).format?.name ?? '',
+      );
+      return new Response(
+        JSON.stringify({
+          id: schemaName === 'bubble_town_world_state_side_channel' ? 'resp-world-state-gate' : 'resp-structured-world-state',
+          model: 'hermes-agent',
+          output: [
+            {
+              type: 'message',
+              role: 'assistant',
+              content: [{
+                type: 'output_text',
+                text: schemaName === 'bubble_town_world_state_side_channel'
+                  ? '{"decision":"skip","reason":"当前轮次没有新的稳定世界状态。","confidence":0.91,"candidates":[]}'
+                  : '{"candidates":[]}',
+              }],
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+      );
+    }
+
     return new Response(
       JSON.stringify({
         id: 'resp-story-1',
@@ -77,9 +107,13 @@ test('sendStorylineChat 解析 Storyline profile 并写入 RuntimeSession', asyn
     assert.equal(response.storylineId, storyline.id);
     assert.equal(response.sessionId, 'story-session-1');
     assert.equal(response.responseId, 'resp-story-1');
+    assert.equal(response.worldStateDebug?.processingStatus, 'completed');
+    assert.equal(response.worldStateDebug?.processingPath, 'skip');
+    assert.equal(response.worldStateDebug?.updated, false);
+    assert.equal(response.worldStateDebug?.gatingResponse?.decision, 'skip');
     assert.equal(getRuntimeSessionForStoryline(storyline.id)?.hermesSessionId, 'story-session-1');
     assert.equal(getRuntimeSessionForStoryline(storyline.id)?.previousResponseId, 'resp-story-1');
-    const chatCall = fetchCalls.find((call) => call.url.endsWith('/responses'));
+    const chatCall = fetchCalls.find((call) => call.url.endsWith('/responses') && !call.payload.text);
     assert.equal(chatCall?.url, 'http://127.0.0.1:9651/v1/responses');
     assert.equal(chatCall?.payload.input, '你在吗？');
     assert.match(String(chatCall?.payload.instructions), /BubbleTownContextPack/);
@@ -94,26 +128,59 @@ test('sendStorylineChat 完成后自动写入活动日志和用户记忆', async
   const hermesHome = createHermesHome();
   const originalFetch = globalThis.fetch;
 
-  globalThis.fetch = async () => new Response(
-    JSON.stringify({
-      id: 'resp-story-memory',
-      model: 'hermes-agent',
-      output: [
+  globalThis.fetch = async (_input, init) => {
+    const payload = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+    if (payload.text && typeof payload.text === 'object') {
+      const schemaName = String(
+        (payload.text as { format?: { name?: string } }).format?.name ?? '',
+      );
+      return new Response(
+        JSON.stringify({
+          id: schemaName === 'bubble_town_world_state_side_channel' ? 'resp-world-state-gate' : 'resp-structured-world-state',
+          model: 'hermes-agent',
+          output: [
+            {
+              type: 'message',
+              role: 'assistant',
+              content: [{
+                type: 'output_text',
+                text: schemaName === 'bubble_town_world_state_side_channel'
+                  ? '{"decision":"skip","reason":"当前轮次没有新的稳定世界状态。","confidence":0.88,"candidates":[]}'
+                  : '{"candidates":[]}',
+              }],
+            },
+          ],
+        }),
         {
-          type: 'message',
-          role: 'assistant',
-          content: [{ type: 'output_text', text: '人家记住啦。' }],
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
-      ],
-    }),
-    {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Hermes-Session-Id': 'story-session-memory',
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        id: 'resp-story-memory',
+        model: 'hermes-agent',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: '人家记住啦。' }],
+          },
+        ],
+      }),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Hermes-Session-Id': 'story-session-memory',
+        },
       },
-    },
-  );
+    );
+  };
 
   try {
     setManagedHermesGatewayProfileForTests('sami-story-001', 'http://127.0.0.1:9651/v1');

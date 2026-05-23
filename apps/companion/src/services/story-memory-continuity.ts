@@ -1,6 +1,13 @@
-import type { MemoryCandidate, Storyline } from '@bubble-town/shared';
+import type { MemoryCandidate, Storyline, WorldStateDebugTrace, WorldStateUpdateCandidate } from '@bubble-town/shared';
 import { createActivityLog, createMemoryRecord, createSuppressedMemory, listAllMemoryRecords, listAllSuppressedMemories } from './story-runtime-store.js';
 import { extractRuleBasedMemoryCandidates } from './memory-candidates.js';
+import type { WorldStateCandidateExtractor, WorldStateExtractorExecutionOptions } from './world-state-extractor.js';
+import { createStructuredWorldStateExtractor } from './world-state-extractor.js';
+import type { WorldStateSideChannelGate } from './world-state-side-channel.js';
+import { createStructuredWorldStateSideChannelGate } from './world-state-side-channel.js';
+import { applyWorldStateUpdateCandidate, buildSceneProjection, getStorylineSceneId } from './world-state.js';
+
+const pendingWorldStateJobs = new Map<string, Promise<void>>();
 
 function compact(value: string, maxLength = 140): string {
   const trimmed = value.replace(/\s+/g, ' ').trim();
@@ -72,16 +79,89 @@ function createActivitySummary(input: string, output: string): string {
   return `用户提到「${compact(input, 64)}」，角色回应「${compact(output, 72)}」。`;
 }
 
-export function recordStorylineTurnContinuity(input: {
+function applyWorldStateCandidates(input: {
+  storylineId: string;
+  candidates: WorldStateUpdateCandidate[];
+  worldStateDebug: WorldStateDebugTrace;
+}): NonNullable<ReturnType<typeof createMemoryRecord>>[] {
+  const created: NonNullable<ReturnType<typeof createMemoryRecord>>[] = [];
+
+  for (const candidate of input.candidates) {
+    try {
+      const result = applyWorldStateUpdateCandidate({
+        storylineId: input.storylineId,
+        candidate,
+      });
+      if (result.created) {
+        created.push(result.created);
+      }
+      input.worldStateDebug.applyResults.push({
+        outcome: result.created ? 'created' : 'existing',
+        candidate,
+        createdMemoryId: result.created?.id,
+        existingMemoryId: result.existing?.id,
+        supersededMemoryIds: result.superseded.map((memory) => memory.id),
+      });
+    } catch (error) {
+      input.worldStateDebug.applyResults.push({
+        outcome: 'error',
+        candidate,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  input.worldStateDebug.updated = created.length > 0;
+  return created;
+}
+
+function enqueueWorldStateJob(storylineId: string, task: () => Promise<void>): Promise<void> {
+  const previous = pendingWorldStateJobs.get(storylineId) ?? Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(task)
+    .finally(() => {
+      if (pendingWorldStateJobs.get(storylineId) === next) {
+        pendingWorldStateJobs.delete(storylineId);
+      }
+    });
+  pendingWorldStateJobs.set(storylineId, next);
+  return next;
+}
+
+export async function waitForPendingWorldStateJobsForTests(): Promise<void> {
+  await Promise.all(
+    [...pendingWorldStateJobs.values()].map((job) => job.catch(() => undefined)),
+  );
+}
+
+export async function recordStorylineTurnContinuity(input: {
   storyline: Storyline;
   userInput: string;
   assistantOutput: string;
   sourceMessageIds?: string[];
+  worldStateGate?: WorldStateSideChannelGate;
+  worldStateExtractor?: WorldStateCandidateExtractor;
+  extractorExecutionOptions?: WorldStateExtractorExecutionOptions;
+  awaitBackgroundWorldState?: boolean;
 }) {
+  const worldStateDebug: WorldStateDebugTrace = {
+    storylineId: input.storyline.id,
+    sceneId: getStorylineSceneId(input.storyline),
+    userInput: input.userInput,
+    assistantOutput: input.assistantOutput,
+    sourceMessageIds: input.sourceMessageIds,
+    processingStatus: 'completed',
+    applyResults: [],
+    updated: false,
+    sceneProjectionBefore: buildSceneProjection(input.storyline.id, getStorylineSceneId(input.storyline)),
+  };
   const created = {
     activityLog: undefined as ReturnType<typeof createActivityLog> | undefined,
     memories: [] as NonNullable<ReturnType<typeof createMemoryRecord>>[],
+    worldStateMemories: [] as NonNullable<ReturnType<typeof createMemoryRecord>>[],
     suppressedMemory: undefined as ReturnType<typeof createSuppressedMemory> | undefined,
+    worldStateDebug,
   };
 
   if (!isLowInformation(input.userInput, input.assistantOutput)) {
@@ -94,6 +174,68 @@ export function recordStorylineTurnContinuity(input: {
 
   const suppression = extractSuppression(input.userInput);
   if (!suppression) {
+    if (input.worldStateGate || input.worldStateExtractor || input.extractorExecutionOptions) {
+      const gate = input.worldStateGate ?? createStructuredWorldStateSideChannelGate();
+      const worldStateInput = {
+        storyline: input.storyline,
+        userInput: input.userInput,
+        assistantOutput: input.assistantOutput,
+        sourceMessageIds: input.sourceMessageIds,
+        sourceActivityIds: created.activityLog ? [created.activityLog.id] : undefined,
+        executionOptions: input.extractorExecutionOptions,
+        debugTrace: worldStateDebug,
+      };
+
+      try {
+        const gateResult = await gate.decide(worldStateInput);
+        if (gateResult.decision === 'skip') {
+          worldStateDebug.processingPath = 'skip';
+          worldStateDebug.skippedReason = gateResult.reason ?? 'world state side-channel 判定当前 turn 不需要更新。';
+        } else if (gateResult.decision === 'direct_apply') {
+          worldStateDebug.processingPath = 'direct_apply';
+          if (gateResult.candidates.length === 0) {
+            worldStateDebug.skippedReason = 'world state side-channel 判定可直接应用，但未产出可写入 candidate。';
+          } else {
+            created.worldStateMemories.push(...applyWorldStateCandidates({
+              storylineId: input.storyline.id,
+              candidates: gateResult.candidates,
+              worldStateDebug,
+            }));
+          }
+        } else {
+          worldStateDebug.processingStatus = 'scheduled';
+          worldStateDebug.processingPath = 'uncertain_fallback_extractor';
+          worldStateDebug.skippedReason = 'world state side-channel 判定为 uncertain，已异步调度 fallback extractor。';
+          const extractor = input.worldStateExtractor ?? createStructuredWorldStateExtractor();
+          const job = enqueueWorldStateJob(input.storyline.id, async () => {
+            try {
+              const candidates = await extractor.extract(worldStateInput);
+              if (candidates.length === 0 && !worldStateDebug.rejectDecision?.rejected) {
+                worldStateDebug.skippedReason = 'fallback extractor 未产出可写入的 world state candidate。';
+              } else {
+                created.worldStateMemories.push(...applyWorldStateCandidates({
+                  storylineId: input.storyline.id,
+                  candidates,
+                  worldStateDebug,
+                }));
+              }
+            } catch {
+              worldStateDebug.error = 'world state fallback extractor failed before apply stage';
+            } finally {
+              worldStateDebug.processingStatus = 'completed';
+              worldStateDebug.sceneProjectionAfter = buildSceneProjection(input.storyline.id, getStorylineSceneId(input.storyline));
+            }
+          });
+          if (input.awaitBackgroundWorldState) {
+            await job;
+          }
+        }
+      } catch {
+        worldStateDebug.processingPath = 'skip';
+        worldStateDebug.error = 'world state side-channel gating failed';
+      }
+    }
+
     for (const candidate of extractRuleBasedMemoryCandidates({
       storyline: input.storyline,
       userInput: input.userInput,
@@ -109,6 +251,12 @@ export function recordStorylineTurnContinuity(input: {
 
   if (suppression && !hasDuplicateSuppression(input.storyline.id, suppression.pattern)) {
     created.suppressedMemory = createSuppressedMemory(input.storyline.id, suppression);
+    worldStateDebug.processingPath = 'skip';
+    worldStateDebug.skippedReason = '当前输入命中了 suppression 规则，跳过 world state 更新。';
+  }
+
+  if (worldStateDebug.processingStatus === 'completed') {
+    worldStateDebug.sceneProjectionAfter = buildSceneProjection(input.storyline.id, getStorylineSceneId(input.storyline));
   }
 
   return created;

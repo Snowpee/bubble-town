@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { sendChat, streamChat } from './hermes-api.js';
 import { resetManagedHermesGatewayStateForTests, setManagedHermesGatewayProfileForTests } from './hermes-gateway.js';
 
@@ -60,7 +61,46 @@ function transcriptFileExists(hermesHome: string, cacheKey: string, profileId = 
   return fs.existsSync(path.join(getProfileHome(hermesHome, profileId), 'sessions', `session_${cacheKey}.json`));
 }
 
-function createSseResponse(events: string[]) {
+function writeResponseStoreEntry(
+  hermesHome: string,
+  profileId: string,
+  input: {
+    responseId: string;
+    sessionId: string;
+    createdAt?: number;
+  },
+) {
+  const profileHome = getProfileHome(hermesHome, profileId);
+  fs.mkdirSync(profileHome, { recursive: true });
+  const db = new DatabaseSync(path.join(profileHome, 'response_store.db'));
+  const createdAt = input.createdAt ?? 1_748_000_000;
+
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS responses (
+        response_id TEXT PRIMARY KEY,
+        data TEXT NOT NULL,
+        accessed_at INTEGER NOT NULL
+      )
+    `);
+    db.prepare('INSERT OR REPLACE INTO responses (response_id, data, accessed_at) VALUES (?, ?, ?)')
+      .run(
+        input.responseId,
+        JSON.stringify({
+          session_id: input.sessionId,
+          response: {
+            id: input.responseId,
+            created: createdAt,
+          },
+        }),
+        createdAt,
+      );
+  } finally {
+    db.close();
+  }
+}
+
+function createSseResponse(events: string[], headers?: Record<string, string>) {
   const encoder = new TextEncoder();
   return new Response(
     new ReadableStream<Uint8Array>({
@@ -75,7 +115,7 @@ function createSseResponse(events: string[]) {
       status: 200,
       headers: {
         'Content-Type': 'text/event-stream',
-        'X-Hermes-Session-Id': 'native-stream-1',
+        ...(headers ?? { 'X-Hermes-Session-Id': 'native-stream-1' }),
       },
     },
   );
@@ -1083,6 +1123,60 @@ test('Bubble Town 专用 Hermes 网关已切到目标 profile 时，不再注入
   }
 });
 
+test('managed gateway 模式下 sendChat 会优先使用 response_store 中 responseId 对应的原生 sessionId', async () => {
+  const hermesHome = createHermesHome();
+  const originalFetch = globalThis.fetch;
+  ensureProfileSessionsDir(hermesHome, 'sami');
+  writeResponseStoreEntry(hermesHome, 'sami', {
+    responseId: 'resp_managed_rotated_1',
+    sessionId: 'native-rotated-session-1',
+  });
+  setManagedHermesGatewayProfileForTests('sami');
+
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        id: 'resp_managed_rotated_1',
+        model: 'hermes-agent',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [
+              {
+                type: 'output_text',
+                text: '已切到新的原生会话。',
+              },
+            ],
+          },
+        ],
+      }),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+    );
+
+  try {
+    const response = await sendChat({
+      input: '继续聊',
+      profileId: 'sami',
+      sessionId: 'stale-managed-session',
+      responseId: 'resp_stale_managed',
+    });
+
+    assert.equal(response.sessionId, 'native-rotated-session-1');
+    assert.equal(response.responseId, 'resp_managed_rotated_1');
+    assert.equal(transcriptFileExists(hermesHome, 'native-rotated-session-1', 'sami'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    resetManagedHermesGatewayStateForTests();
+    cleanupHermesHome(hermesHome);
+  }
+});
+
 test('sendChat 使用路由传入的 gateway snapshot，不受全局 gateway 后续切换影响', async () => {
   const hermesHome = createHermesHome();
   const originalFetch = globalThis.fetch;
@@ -1149,6 +1243,88 @@ test('sendChat 使用路由传入的 gateway snapshot，不受全局 gateway 后
       store: true,
     });
     assert.equal(transcriptFileExists(hermesHome, 'native-snapshot-profile-1', 'sami'), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    resetManagedHermesGatewayStateForTests();
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('managed gateway 模式下 streamChat 完成时会用 response_store 修正最终原生 sessionId', async () => {
+  const hermesHome = createHermesHome();
+  const originalFetch = globalThis.fetch;
+  const completed: Array<{ sessionId: string; responseId?: string }> = [];
+  ensureProfileSessionsDir(hermesHome, 'sami');
+  writeResponseStoreEntry(hermesHome, 'sami', {
+    responseId: 'resp_managed_stream_1',
+    sessionId: 'native-rotated-stream-1',
+  });
+  setManagedHermesGatewayProfileForTests('sami');
+
+  globalThis.fetch = async () =>
+    createSseResponse([
+      `event: response.created
+data: ${JSON.stringify({
+        type: 'response.created',
+        response: {
+          id: 'resp_managed_stream_1',
+          model: 'hermes-agent',
+        },
+      })}
+
+`,
+      `event: response.completed
+data: ${JSON.stringify({
+        type: 'response.completed',
+        response: {
+          id: 'resp_managed_stream_1',
+          model: 'hermes-agent',
+          output: [
+            {
+              type: 'message',
+              role: 'assistant',
+              content: [
+                {
+                  type: 'output_text',
+                  text: '流式已切到新的原生会话。',
+                },
+              ],
+            },
+          ],
+        },
+      })}
+
+`,
+      'data: [DONE]\n\n',
+    ], {});
+
+  try {
+    const result = await streamChat(
+      {
+        input: '继续流式聊',
+        profileId: 'sami',
+        sessionId: 'stale-managed-session',
+        responseId: 'resp_stale_managed',
+      },
+      {
+        onComplete(event) {
+          completed.push({
+            sessionId: event.sessionId,
+            responseId: event.responseId,
+          });
+        },
+      },
+    );
+
+    assert.equal(result.sessionId, 'native-rotated-stream-1');
+    assert.equal(result.responseId, 'resp_managed_stream_1');
+    assert.deepEqual(completed, [
+      {
+        sessionId: 'native-rotated-stream-1',
+        responseId: 'resp_managed_stream_1',
+      },
+    ]);
+    assert.equal(transcriptFileExists(hermesHome, 'native-rotated-stream-1', 'sami'), false);
   } finally {
     globalThis.fetch = originalFetch;
     resetManagedHermesGatewayStateForTests();

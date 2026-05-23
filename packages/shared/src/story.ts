@@ -11,12 +11,117 @@ export type StorylineStatus = 'active' | 'archived';
 export type RuntimeSessionReason = 'storyline_start' | 'continue' | 'context_rollover' | 'debug';
 export type MemoryScope = 'character' | 'user' | 'story' | 'activity';
 export type MemorySource = 'manual' | 'auto_extract' | 'conversation' | 'summary';
-export type MemoryKind = 'identity' | 'preference' | 'boundary' | 'commitment' | 'relationship' | 'story_fact' | 'emotion_state' | 'unclassified';
+export type MemoryKind =
+  | 'identity'
+  | 'preference'
+  | 'boundary'
+  | 'commitment'
+  | 'relationship'
+  | 'story_fact'
+  | 'emotion_state'
+  | 'world_object_state'
+  | 'world_event'
+  | 'unclassified';
 export type MemoryLifespan = 'short_term' | 'long_term' | 'episodic' | 'temporary';
 export type MemoryEmbeddingTargetType = 'memory' | 'activity';
 export type RuntimeRecordStatus = 'active' | 'hidden' | 'deleted';
 export type SuppressedMemoryStatus = 'active' | 'deleted';
 export type ContinuityMode = 'live' | 'same_day' | 'new_day' | 'long_gap';
+export type WorldStateKind = 'status' | 'location';
+export type WorldStateActionType = 'place' | 'move' | 'open' | 'close' | 'break' | 'repair' | 'unknown';
+
+export interface WorldStateMetadata {
+  sceneId: string;
+  objectId: string;
+  objectLabel: string;
+  stateKind: WorldStateKind;
+  state: string;
+  locationText?: string;
+  version: number;
+}
+
+export interface SceneProjectionItem {
+  memoryId: string;
+  objectId: string;
+  objectLabel: string;
+  stateKind: WorldStateKind;
+  state: string;
+  locationText?: string;
+  content: string;
+}
+
+export interface SceneProjection {
+  sceneId: string;
+  summary: string;
+  items: SceneProjectionItem[];
+}
+
+export interface WorldStateUpdateCandidate {
+  sceneId: string;
+  objectLabel: string;
+  stateKind: WorldStateKind;
+  state: string;
+  locationText?: string;
+  actionType: WorldStateActionType;
+  sourceSpan?: string;
+  isCurrentStableState: boolean;
+  reason: string;
+  confidence: number;
+  sourceMessageIds?: string[];
+  sourceActivityIds?: string[];
+}
+
+export interface WorldStateDebugApplyResult {
+  outcome: 'created' | 'existing' | 'error';
+  candidate: WorldStateUpdateCandidate;
+  createdMemoryId?: string;
+  existingMemoryId?: string;
+  supersededMemoryIds?: string[];
+  error?: string;
+}
+
+export type WorldStateProcessingStatus = 'scheduled' | 'completed';
+export type WorldStateProcessingPath = 'skip' | 'direct_apply' | 'uncertain_fallback_extractor';
+export type WorldStateSideChannelDecision = 'skip' | 'direct_apply' | 'uncertain';
+
+export interface WorldStateSideChannelTrace {
+  decision: WorldStateSideChannelDecision;
+  reason?: string;
+  confidence: number;
+  candidates: WorldStateUpdateCandidate[];
+}
+
+export interface WorldStateDebugTrace {
+  storylineId: string;
+  sceneId: string;
+  userInput: string;
+  assistantOutput: string;
+  sourceMessageIds?: string[];
+  processingStatus: WorldStateProcessingStatus;
+  processingPath?: WorldStateProcessingPath;
+  rejectDecision?: {
+    rejected: boolean;
+    reason?: string;
+  };
+  gatingRequest?: {
+    instructions: string;
+    prompt: string;
+  };
+  gatingResponse?: WorldStateSideChannelTrace;
+  llmRequest?: {
+    instructions: string;
+    prompt: string;
+  };
+  llmResponse?: {
+    candidates: WorldStateUpdateCandidate[];
+  };
+  applyResults: WorldStateDebugApplyResult[];
+  updated: boolean;
+  skippedReason?: string;
+  error?: string;
+  sceneProjectionBefore?: SceneProjection;
+  sceneProjectionAfter?: SceneProjection;
+}
 
 export interface Character {
   id: string;
@@ -34,6 +139,7 @@ export interface Storyline {
   hermesProfileId: string;
   title: string;
   description?: string;
+  currentSceneId?: string;
   createdAt: string;
   updatedAt: string;
   lastInteractionAt?: string;
@@ -69,12 +175,15 @@ export interface MemoryRecord {
   sourceMessageIds?: string[];
   supersedes?: string[];
   supersededBy?: string;
+  sourceActivityIds?: string[];
   lastAccessedAt?: string;
   accessCount?: number;
+  expiresAt?: string;
   embeddingRef?: string;
   embeddingModel?: string;
   embeddingText?: string;
   embeddingUpdatedAt?: string;
+  worldState?: WorldStateMetadata;
 }
 
 export interface MemoryEmbedding {
@@ -101,6 +210,8 @@ export interface MemoryCandidate {
   reason: string;
   shouldPersist: boolean;
   sourceMessageIds?: string[];
+  worldState?: WorldStateMetadata;
+  sourceActivityIds?: string[];
 }
 
 export interface MemoryRetrievalMetadata {
@@ -173,6 +284,12 @@ export interface ContinuityHint {
   message: string;
 }
 
+export interface ConversationPacing {
+  elapsedMs?: number;
+  topicShiftCommentAllowed: boolean;
+  topicShiftCommentWindowMinutes: number;
+}
+
 export interface SessionAnchors {
   messageCount: number;
   firstUserMessage?: ChatMessage;
@@ -187,6 +304,7 @@ export interface ContextPack {
   hermesProfileId: string;
   time: TimeContext;
   continuityMode: ContinuityMode;
+  conversationPacing: ConversationPacing;
   sessionAnchors: SessionAnchors;
   recentMessages: ChatMessage[];
   memories: MemoryRecord[];
@@ -196,6 +314,7 @@ export interface ContextPack {
   activityLogs: ActivityLog[];
   continuityHints: ContinuityHint[];
   relativeTimeResults: RelativeTimeSearchResult[];
+  sceneProjection?: SceneProjection;
   systemInstructions: string[];
 }
 
@@ -231,11 +350,13 @@ export interface CreateStorylineRequest {
   hermesProfileId: string;
   title: string;
   description?: string;
+  currentSceneId?: string;
 }
 
 export interface UpdateStorylineRequest {
   title?: string;
   description?: string;
+  currentSceneId?: string;
   status?: StorylineStatus;
 }
 
@@ -249,6 +370,7 @@ export interface StorylineChatRequest {
 export interface StorylineChatResponse extends ChatResponse {
   storylineId: string;
   runtimeSessionId: string;
+  worldStateDebug?: WorldStateDebugTrace;
 }
 
 export interface StorylineChatStreamStartEvent extends ChatStreamStartEvent {
@@ -259,6 +381,7 @@ export interface StorylineChatStreamStartEvent extends ChatStreamStartEvent {
 export interface StorylineChatStreamCompleteEvent extends ChatStreamCompleteEvent {
   storylineId: string;
   runtimeSessionId: string;
+  worldStateDebug?: WorldStateDebugTrace;
 }
 
 export interface ContextPreviewRequest {
@@ -269,6 +392,7 @@ export interface ContextPreviewRequest {
 export interface ContextPreviewResponse {
   contextPack: ContextPack;
   renderedInstructions: string;
+  worldStateDebug?: WorldStateDebugTrace;
 }
 
 export interface RelativeTimeSearchRequest {
@@ -305,12 +429,15 @@ export interface CreateMemoryRequest {
   sourceMessageIds?: string[];
   supersedes?: string[];
   supersededBy?: string;
+  sourceActivityIds?: string[];
   lastAccessedAt?: string;
   accessCount?: number;
+  expiresAt?: string;
   embeddingRef?: string;
   embeddingModel?: string;
   embeddingText?: string;
   embeddingUpdatedAt?: string;
+  worldState?: WorldStateMetadata;
 }
 
 export interface UpdateMemoryRequest {
@@ -326,12 +453,15 @@ export interface UpdateMemoryRequest {
   sourceMessageIds?: string[];
   supersedes?: string[];
   supersededBy?: string;
+  sourceActivityIds?: string[];
   lastAccessedAt?: string;
   accessCount?: number;
+  expiresAt?: string;
   embeddingRef?: string;
   embeddingModel?: string;
   embeddingText?: string;
   embeddingUpdatedAt?: string;
+  worldState?: WorldStateMetadata;
 }
 
 export interface SuppressedMemoriesResponse {
@@ -345,6 +475,23 @@ export interface CreateSuppressedMemoryRequest {
 
 export interface ActivityLogsResponse {
   activityLogs: ActivityLog[];
+}
+
+export interface MemoryConsolidationResult {
+  summaryMemory?: MemoryRecord;
+  duplicateKeepers: MemoryRecord[];
+  hiddenDuplicates: MemoryRecord[];
+  consolidatedActivityLogs: ActivityLog[];
+}
+
+export interface CorrectMemoryRequest {
+  content: string;
+  reason?: string;
+}
+
+export interface CorrectMemoryResponse {
+  replacement: MemoryRecord;
+  superseded: MemoryRecord;
 }
 
 export interface CreateActivityLogRequest {

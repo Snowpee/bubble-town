@@ -10,6 +10,7 @@ import { previewContextPack, previewContextPackForInput, sendStorylineChat, stre
 import { searchRelativeTime } from '../services/relative-time-search.js';
 import { buildTimeContext } from '../services/context-pack.js';
 import { validateProfileContinuity } from '../services/profile-continuity.js';
+import { consolidateStorylineMemory, correctMemory } from '../services/memory-governance.js';
 import {
   createActivityLog,
   createMemoryRecord,
@@ -160,6 +161,20 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
     return { results: searchRelativeTime(storyline.id, input, buildTimeContext(storyline.lastInteractionAt)) };
   });
 
+  app.post('/api/storylines/:id/memory/consolidate', async (request, reply) => {
+    const params = request.params as { id: string };
+    const body = request.body as { activityLimit?: number } | undefined;
+    try {
+      return consolidateStorylineMemory({
+        storylineId: params.id,
+        activityLimit: body?.activityLimit,
+      });
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : '记忆巩固失败。' };
+    }
+  });
+
   app.post('/api/storylines/:id/profile/validate-continuity', async (request, reply) => {
     const params = request.params as { id: string };
     const storyline = getStoryline(params.id);
@@ -227,6 +242,26 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
       return { message: '未找到目标记忆。' };
     }
     return memory;
+  });
+
+  app.post('/api/memories/:id/correct', async (request, reply) => {
+    const params = request.params as { id: string };
+    const body = request.body as { content?: string; reason?: string };
+    const content = body.content?.trim();
+    if (!content) {
+      reply.code(400);
+      return { message: '纠正后的记忆内容不能为空。' };
+    }
+    try {
+      return correctMemory({
+        memoryId: params.id,
+        content,
+        reason: body.reason,
+      });
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : '纠正记忆失败。' };
+    }
   });
 
   app.get('/api/storylines/:id/suppressed-memories', async (request, reply) => {

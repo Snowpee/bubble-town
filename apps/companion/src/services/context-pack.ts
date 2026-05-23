@@ -7,12 +7,15 @@ import {
   listActivityLogs,
   listMemoryRecords,
   listSuppressedMemories,
+  markMemoryRecordsAccessed,
 } from './story-runtime-store.js';
 import { searchRelativeTime } from './relative-time-search.js';
 import { retrieveMemoriesForContext } from './memory-retrieval.js';
 import { ensureMemoryEmbeddings, getSemanticScores } from './memory-embeddings.js';
 import { matchesSuppressionText } from './suppression-filter.js';
 import { isSuppressionDirectInquiry } from './recall-language.js';
+import { resolveConversationPacing } from './conversation-pacing.js';
+import { buildSceneProjection, getStorylineSceneId } from './world-state.js';
 
 function formatDateInTimezone(date: Date, timezone: string): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -249,8 +252,15 @@ export function buildContextPack(storylineId: string, options: { input?: string 
   const recentMessages = visibleSessionMessages.slice(-12);
   const relativeTimeResults = options.input ? searchRelativeTime(storyline.id, options.input, time, suppressedMemories) : [];
   const continuityMode = resolveContinuityMode(storyline.lastInteractionAt);
+  const conversationPacingState = resolveConversationPacing({ lastInteractionAt: storyline.lastInteractionAt });
+  const conversationPacing = {
+    elapsedMs: conversationPacingState.elapsedMs,
+    topicShiftCommentAllowed: conversationPacingState.topicShiftCommentAllowed,
+    topicShiftCommentWindowMinutes: conversationPacingState.policy.topicShiftCommentWindowMinutes,
+  };
   const continuityHints = buildContinuityHints({ continuityMode, time, relativeTimeResults });
-  const activeMemories = listMemoryRecords(storyline.id, character.id);
+  const activeMemories = listMemoryRecords(storyline.id, character.id)
+    .filter((memory) => memory.kind !== 'world_object_state');
   const semanticScores = options.input?.trim()
     ? (() => {
         try {
@@ -272,6 +282,9 @@ export function buildContextPack(storylineId: string, options: { input?: string 
     budget: relativeTimeResults.some((result) => result.hit) ? 8 : 6,
     semanticScores,
   });
+  markMemoryRecordsAccessed(retrievedMemories.memories.map((memory) => memory.id));
+
+  const sceneProjection = buildSceneProjection(storyline.id, getStorylineSceneId(storyline));
 
   return {
     storylineId: storyline.id,
@@ -279,6 +292,7 @@ export function buildContextPack(storylineId: string, options: { input?: string 
     hermesProfileId: storyline.hermesProfileId,
     time,
     continuityMode,
+    conversationPacing,
     sessionAnchors: buildSessionAnchors(visibleSessionMessages),
     recentMessages,
     memories: retrievedMemories.memories,
@@ -288,15 +302,20 @@ export function buildContextPack(storylineId: string, options: { input?: string 
     activityLogs: filterSuppressedActivityLogs(listActivityLogs(storyline.id), suppressedMemories),
     continuityHints,
     relativeTimeResults,
+    sceneProjection,
     systemInstructions: [
       '你正在扮演一个长期陪伴型角色。请自然续接当前 Timeline，不要用系统记录口吻解释上下文。',
       '只使用当前 ContextPack 中的剧情记忆和活动记录；不要主动引入其它剧情的信息。',
+      'sceneProjection 表示当前场景中稳定成立的重要物品状态；它比普通语义召回更可靠，但不要把它当成数据库字段逐项复述给用户。',
       'suppressedMemories 表示用户不希望主动展开的边界；相关内容已在注入前过滤，不要主动猜测、追问或展开被过滤主题。',
       'ContextPack 中的 now、localNow、localTime、timezone 和相对时间范围是 authoritative_time，优先于 Conversation started、历史消息中的时间说法和之前的 terminal date 工具结果。',
       '之前轮次的 terminal date 输出只代表当时的工具结果；每一轮回答当前时间、昼夜、早晚、是否该睡觉时，都必须重新以本轮 ContextPack 的 localNow/localTime 为准。',
       '使用检索到的记忆时，不要解释来源；如果 relativeTimeResults 未命中，不要编造具体过去事件。',
       'sessionAnchors 描述当前 Hermes session 的边界消息；用户询问当前对话的开场、最近发言或回顾顺序时，优先使用这些锚点。',
       'memories 已按相关性、重要性、置信度、新鲜度和 suppressedMemories 预算筛选；active 不代表每轮都必须提及。',
+      conversationPacing.topicShiftCommentAllowed
+        ? '用户在短间隔内切换话题时，可以轻描淡写地承接；但只有在确实有助于氛围时才评论话题变化。'
+        : '用户在较长间隔后发送新问题时，将其视为自然开启的新话题；不要评论“话题突然”“怎么突然问这个”或追问为什么换话题，直接回答当前问题。',
     ],
   };
 }
@@ -317,6 +336,9 @@ export function renderContextPackInstructions(contextPack: ContextPack): string 
   }).join('\n') || '- 无';
   const recent = contextPack.recentMessages.map((message) => `- ${message.role}: ${message.content}`).join('\n') || '- 无';
   const hints = contextPack.continuityHints.map((hint) => `- [${hint.kind}] ${hint.message}`).join('\n') || '- 无';
+  const sceneProjection = contextPack.sceneProjection
+    ? `- ${contextPack.sceneProjection.summary}`
+    : '- 无';
   const relative = contextPack.relativeTimeResults.map((result) => {
     const activities = result.activityLogs.map((entry) => `[activity] ${entry.summary}`).join('；');
     const memories = result.memories.map((memory) => `[memory] ${memory.content}`).join('；');
@@ -342,10 +364,13 @@ export function renderContextPackInstructions(contextPack: ContextPack): string 
     `tonight: ${contextPack.time.tonight.join(' ~ ')}`,
     `elapsedSinceLastInteraction: ${contextPack.time.elapsedSinceLastInteraction ?? 'unknown'}`,
     `continuityMode: ${contextPack.continuityMode}`,
+    `conversationPacing: topicShiftCommentAllowed=${contextPack.conversationPacing.topicShiftCommentAllowed}; windowMinutes=${contextPack.conversationPacing.topicShiftCommentWindowMinutes}; elapsedMs=${contextPack.conversationPacing.elapsedMs ?? 'unknown'}`,
     'systemInstructions:',
     ...contextPack.systemInstructions.map((instruction) => `- ${instruction}`),
     'continuityHints:',
     hints,
+    'sceneProjection:',
+    sceneProjection,
     'sessionAnchors:',
     `- messageCount: ${contextPack.sessionAnchors.messageCount}`,
     renderAnchor('firstUserMessage', contextPack.sessionAnchors.firstUserMessage),

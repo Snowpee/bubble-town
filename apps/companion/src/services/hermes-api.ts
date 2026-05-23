@@ -83,6 +83,14 @@ interface PersistOptions {
   transcriptInput?: string;
 }
 
+export interface StructuredDataRequest<TSchema extends Record<string, unknown> = Record<string, unknown>> {
+  profileId?: string;
+  input: string;
+  runtimeInstructions: string;
+  schemaName: string;
+  schema: TSchema;
+}
+
 type JsonRecord = Record<string, unknown>;
 
 interface MessageParts {
@@ -585,6 +593,20 @@ function createChatTurnContext(request: ChatRequest, mode: ChatMode, executionOp
   };
 }
 
+function createStatelessChatTurnContext(profileId: string, executionOptions: ChatExecutionOptions = {}): ChatTurnContext {
+  const managedGatewayProfile = executionOptions.managedGatewayProfileId === profileId || isManagedHermesGatewayProfile(profileId);
+  const runtime = resolveProfileRuntime(profileId, managedGatewayProfile);
+
+  return {
+    profileId,
+    apiBaseUrl: executionOptions.apiBaseUrl ?? getHermesApiBaseUrl(),
+    managedGatewayProfile,
+    model: runtime.model,
+    systemPrompt: runtime.systemPrompt,
+    useSessionContinuationHeader: false,
+  };
+}
+
 function extractSessionValue(value: unknown): string | undefined {
   if (typeof value === 'string' && value) {
     return value;
@@ -621,6 +643,11 @@ function resolveCanonicalSessionId(
   currentSessionId?: string,
 ): string | undefined {
   return extractSessionId(payload) ?? resolveRequestSessionId(request) ?? currentSessionId;
+}
+
+function resolveFinalSessionId(profileId: string, responseId?: string, candidateSessionId?: string): string | undefined {
+  const responseStoreSessionId = responseId ? getSessionIdForResponse(responseId, profileId) : undefined;
+  return responseStoreSessionId ?? candidateSessionId;
 }
 
 function persistConversationTurn(
@@ -1060,6 +1087,65 @@ function isMissingPreviousResponseError(status: number, details: string): boolea
   return status === 404 && details.includes('Previous response not found');
 }
 
+function buildStructuredResponsesPayload(
+  context: ChatTurnContext,
+  request: StructuredDataRequest,
+): JsonRecord {
+  const payload: JsonRecord = {
+    model: context.model,
+    input: request.input,
+    stream: false,
+    store: false,
+    text: {
+      format: {
+        type: 'json_schema',
+        name: request.schemaName,
+        schema: request.schema,
+        strict: true,
+      },
+    },
+  };
+
+  const instructions = [context.systemPrompt, request.runtimeInstructions].filter(Boolean).join('\n\n');
+  if (instructions) {
+    payload.instructions = instructions;
+  }
+
+  return payload;
+}
+
+export async function requestStructuredData<TResult>(
+  request: StructuredDataRequest,
+  executionOptions: ChatExecutionOptions = {},
+): Promise<TResult> {
+  const profileId = request.profileId || DEFAULT_PROFILE_ID;
+  const context = createStatelessChatTurnContext(profileId, executionOptions);
+  const response = await fetch(`${context.apiBaseUrl}/responses`, {
+    method: 'POST',
+    headers: buildHermesRequestHeaders(context),
+    body: JSON.stringify(buildStructuredResponsesPayload(context, request)),
+  });
+
+  if (!response.ok) {
+    const details = await readErrorDetails(response);
+    throw new Error(`Hermes structured output 请求失败: ${response.status}${details ? ` ${details}` : ''}`);
+  }
+
+  const data = (await response.json()) as JsonRecord;
+  const output = extractCompletedOutput(data, '').trim();
+  if (!output) {
+    throw new Error('Hermes structured output 未返回可解析内容。');
+  }
+
+  try {
+    return JSON.parse(output) as TResult;
+  } catch (error) {
+    throw new Error(
+      `Hermes structured output 返回了非 JSON 内容: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 export async function streamChat(
   request: InternalChatRequest,
   handlers: StreamChatHandlers = {},
@@ -1210,6 +1296,7 @@ export async function streamChat(
     }
 
     const completedAt = new Date().toISOString();
+    sessionId = resolveFinalSessionId(context.profileId, responseId, sessionId);
     const persisted = persistConversationTurn(context, request, output, model, completedAt, {
       sessionId,
       responseId,
@@ -1221,7 +1308,7 @@ export async function streamChat(
   }
 
   const completedAt = new Date().toISOString();
-  sessionId = sessionId ?? (responseId ? getSessionIdForResponse(responseId, context.profileId) : undefined);
+  sessionId = resolveFinalSessionId(context.profileId, responseId, sessionId);
   const persisted = persistConversationTurn(context, request, output, model, completedAt, {
     sessionId,
     responseId,
@@ -1284,10 +1371,11 @@ export async function sendChat(request: InternalChatRequest, executionOptions: C
   const output = effectiveMode === 'chat-completions' ? extractChatCompletionOutput(data) : extractCompletedOutput(data, '');
   const model = extractModel(data, 'hermes-agent');
   const responseId = effectiveMode === 'chat-completions' ? undefined : extractResponseId(data);
-  const sessionId =
-    resolveSessionIdFromHeaders(response.headers)
-    ?? resolveCanonicalSessionId(request, data, context.sessionId)
-    ?? (responseId ? getSessionIdForResponse(responseId, context.profileId) : undefined);
+  const sessionId = resolveFinalSessionId(
+    context.profileId,
+    responseId,
+    resolveSessionIdFromHeaders(response.headers) ?? resolveCanonicalSessionId(request, data, context.sessionId),
+  );
   const persisted = persistConversationTurn(context, request, output, model, now, {
     sessionId,
     responseId,

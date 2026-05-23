@@ -15,6 +15,7 @@ import {
   resetStoryRuntimeForTests,
   updateActivityLog,
   updateMemoryRecord,
+  touchStorylineInteraction,
   upsertRuntimeSession,
 } from './story-runtime-store.js';
 
@@ -240,7 +241,31 @@ test('ContextPack 始终注入当前 session 边界锚点', () => {
   }
 });
 
-test('自动连续性记录不会把问句写成长期记忆', () => {
+test('ContextPack 在长间隔后禁止评论用户突然切换话题', () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-001',
+      title: '初遇',
+    });
+    touchStorylineInteraction(storyline.id, new Date(Date.now() - 20 * 60_000).toISOString());
+
+    const contextPack = buildContextPack(storyline.id, { input: '如何区分天牛和蟑螂？' });
+    const rendered = renderContextPackInstructions(contextPack);
+
+    assert.equal(contextPack.conversationPacing.topicShiftCommentAllowed, false);
+    assert.match(rendered, /视为自然开启的新话题/);
+    assert.match(rendered, /不要评论/);
+    assert.match(rendered, /话题突然/);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('自动连续性记录不会把问句写成长期记忆', async () => {
   const hermesHome = createHermesHome();
 
   try {
@@ -251,7 +276,7 @@ test('自动连续性记录不会把问句写成长期记忆', () => {
       title: '初遇',
     });
 
-    recordStorylineTurnContinuity({
+    await recordStorylineTurnContinuity({
       storyline,
       userInput: '还记得我第一次和你打招呼说了什么吗',
       assistantOutput: '我再看看当前会话。',
@@ -294,6 +319,57 @@ test('ContextPack 注入当前 Storyline active 记忆、活动日志和抑制�
     assert.doesNotMatch(rendered, /不要主动提昨晚争吵/);
     assert.doesNotMatch(rendered, /隐藏记忆/);
     assert.doesNotMatch(rendered, /隐藏活动/);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('ContextPack 额外注入当前场景的 Scene Projection，且不依赖普通记忆检索', () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-001',
+      title: '初遇',
+      currentSceneId: 'north_window_room',
+    });
+    createMemoryRecord(storyline.id, {
+      content: '旧台灯已经损坏。',
+      kind: 'world_object_state',
+      worldState: {
+        sceneId: 'north_window_room',
+        objectId: 'lamp_001',
+        objectLabel: '旧台灯',
+        stateKind: 'status',
+        state: 'broken',
+        version: 1,
+      },
+    });
+    createMemoryRecord(storyline.id, {
+      content: '南门已经锁好。',
+      kind: 'world_object_state',
+      worldState: {
+        sceneId: 'south_gate',
+        objectId: 'gate_001',
+        objectLabel: '南门',
+        stateKind: 'status',
+        state: 'closed',
+        version: 1,
+      },
+    });
+
+    const contextPack = buildContextPack(storyline.id, { input: '我们继续聊刚才的事。' });
+    const rendered = renderContextPackInstructions(contextPack);
+
+    assert.equal(contextPack.sceneProjection?.sceneId, 'north_window_room');
+    assert.match(contextPack.sceneProjection?.summary ?? '', /旧台灯已经损坏/);
+    assert.equal(contextPack.sceneProjection?.items.length, 1);
+    assert.equal(contextPack.memories.some((memory) => memory.kind === 'world_object_state'), false);
+    assert.match(rendered, /sceneProjection:/);
+    assert.match(rendered, /旧台灯已经损坏/);
+    assert.doesNotMatch(rendered, /南门已经锁好/);
   } finally {
     cleanupHermesHome(hermesHome);
   }

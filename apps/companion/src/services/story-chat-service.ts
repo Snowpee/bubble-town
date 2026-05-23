@@ -94,17 +94,22 @@ export async function sendStorylineChat(request: StorylineChatRequest): Promise<
     reason: runtimeSession ? 'continue' : 'storyline_start',
   });
   touchStorylineInteraction(storyline.id);
-  recordStorylineTurnContinuity({
+  const continuity = await recordStorylineTurnContinuity({
     storyline,
     userInput: request.input,
     assistantOutput: response.output,
     sourceMessageIds: [response.sessionId, response.responseId].filter((value): value is string => Boolean(value)),
+    extractorExecutionOptions: {
+      apiBaseUrl: gateway.apiBaseUrl,
+      managedGatewayProfileId: gateway.profileId,
+    },
   });
 
   return {
     ...response,
     storylineId: storyline.id,
     runtimeSessionId: updatedRuntimeSession.id,
+    worldStateDebug: continuity.worldStateDebug,
   };
 }
 
@@ -118,6 +123,7 @@ export async function streamStorylineChat(
   const preview = previewContextPackForInput(storyline.id, request.input);
   const gateway = await ensureManagedHermesGateway(storyline.hermesProfileId);
   let continuityRecorded = false;
+  let completedEvent: ChatStreamCompleteEvent | undefined;
   let currentRuntimeSession = runtimeSession ?? upsertRuntimeSession({
     storylineId: storyline.id,
     hermesProfileId: storyline.hermesProfileId,
@@ -157,20 +163,7 @@ export async function streamStorylineChat(
         reason: runtimeSession ? 'continue' : 'storyline_start',
       });
       touchStorylineInteraction(storyline.id);
-      if (!continuityRecorded) {
-        recordStorylineTurnContinuity({
-          storyline,
-          userInput: request.input,
-          assistantOutput: event.output,
-          sourceMessageIds: [event.sessionId, event.responseId].filter((value): value is string => Boolean(value)),
-        });
-        continuityRecorded = true;
-      }
-      handlers.onComplete?.({
-        ...event,
-        storylineId: storyline.id,
-        runtimeSessionId: currentRuntimeSession.id,
-      });
+      completedEvent = event;
     },
   }, options, {
     apiBaseUrl: gateway.apiBaseUrl,
@@ -185,18 +178,32 @@ export async function streamStorylineChat(
     reason: runtimeSession ? 'continue' : 'storyline_start',
   });
   touchStorylineInteraction(storyline.id);
+  let continuity = undefined as Awaited<ReturnType<typeof recordStorylineTurnContinuity>> | undefined;
   if (!continuityRecorded) {
-    recordStorylineTurnContinuity({
+    continuity = await recordStorylineTurnContinuity({
       storyline,
       userInput: request.input,
       assistantOutput: response.output,
       sourceMessageIds: [response.sessionId, response.responseId].filter((value): value is string => Boolean(value)),
+      extractorExecutionOptions: {
+        apiBaseUrl: gateway.apiBaseUrl,
+        managedGatewayProfileId: gateway.profileId,
+      },
     });
+    continuityRecorded = true;
   }
+
+  handlers.onComplete?.({
+    ...(completedEvent ?? response),
+    storylineId: storyline.id,
+    runtimeSessionId: currentRuntimeSession.id,
+    worldStateDebug: continuity?.worldStateDebug,
+  });
 
   return {
     ...response,
     storylineId: storyline.id,
     runtimeSessionId: currentRuntimeSession.id,
+    worldStateDebug: continuity?.worldStateDebug,
   };
 }

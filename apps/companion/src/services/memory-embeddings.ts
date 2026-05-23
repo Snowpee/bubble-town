@@ -243,10 +243,27 @@ export function getSemanticScores(input: {
   return scores;
 }
 
+export function removeEmbeddingsForStorylines(storylineIds: string[]): number {
+  const targets = new Set(storylineIds.map((storylineId) => storylineId.trim()).filter(Boolean));
+  if (targets.size === 0) {
+    return 0;
+  }
+
+  const data = readData();
+  const nextEmbeddings = data.embeddings.filter((embedding) => !targets.has(embedding.storylineId));
+  const removedCount = data.embeddings.length - nextEmbeddings.length;
+  if (removedCount > 0) {
+    writeData({
+      ...data,
+      embeddings: nextEmbeddings,
+    });
+  }
+  return removedCount;
+}
+
 export function resetMemoryEmbeddingsForTests(): void {
   const storePath = getEmbeddingStorePath();
   if (fs.existsSync(storePath)) {
     fs.unlinkSync(storePath);
   }
 }
-
