@@ -71,10 +71,16 @@ interface ChatExecutionOptions {
   managedGatewayProfileId?: string;
 }
 
+type InternalChatRequest = ChatRequest & {
+  transcriptInput?: string;
+  runtimeInstructions?: string;
+};
+
 interface PersistOptions {
   sessionId?: string;
   responseId?: string;
   mode: ChatMode;
+  transcriptInput?: string;
 }
 
 type JsonRecord = Record<string, unknown>;
@@ -400,13 +406,15 @@ function toChatCompletionMessages(
   input: string,
   attachments?: ChatImageAttachment[],
   systemPrompt?: string,
+  runtimeInstructions?: string,
 ) {
+  const combinedSystemPrompt = [systemPrompt, runtimeInstructions].filter(Boolean).join('\n\n');
   return [
-    ...(systemPrompt
+    ...(combinedSystemPrompt
       ? [
           {
             role: 'system' as const,
-            content: systemPrompt,
+            content: combinedSystemPrompt,
           },
         ]
       : []),
@@ -422,19 +430,26 @@ function toChatCompletionMessages(
 }
 
 function buildChatCompletionPayload(context: ChatTurnContext, request: ChatRequest, now: string, stream: boolean) {
-  const history =
-    context.transcript && context.sessionId && !context.useSessionContinuationHeader
-      ? mapTranscriptToChatMessages(context.transcript, context.sessionId, now)
-      : [];
+  const internalRequest = request as InternalChatRequest;
+  const transcript =
+    context.transcript ?? (context.sessionId ? loadTranscript(context.profileId, context.sessionId) : undefined);
+  const history = transcript && context.sessionId ? mapTranscriptToChatMessages(transcript, context.sessionId, now) : [];
 
   return {
     model: context.model,
-    messages: toChatCompletionMessages(history, request.input, request.attachments, context.systemPrompt),
+    messages: toChatCompletionMessages(
+      history,
+      request.input,
+      request.attachments,
+      context.systemPrompt,
+      internalRequest.runtimeInstructions,
+    ),
     stream,
   };
 }
 
 function buildResponsesPayload(context: ChatTurnContext, request: ChatRequest, stream: boolean): JsonRecord {
+  const internalRequest = request as InternalChatRequest;
   const payload: JsonRecord = {
     model: context.model,
     input: buildResponsesInput(request),
@@ -442,8 +457,9 @@ function buildResponsesPayload(context: ChatTurnContext, request: ChatRequest, s
     store: true,
   };
 
-  if (context.systemPrompt) {
-    payload.instructions = context.systemPrompt;
+  const instructions = [context.systemPrompt, internalRequest.runtimeInstructions].filter(Boolean).join('\n\n');
+  if (instructions) {
+    payload.instructions = instructions;
   }
 
   if (request.responseId) {
@@ -609,7 +625,7 @@ function resolveCanonicalSessionId(
 
 function persistConversationTurn(
   context: ChatTurnContext,
-  request: ChatRequest,
+  request: InternalChatRequest,
   output: string,
   model: string,
   now: string,
@@ -636,9 +652,10 @@ function persistConversationTurn(
     createEmptyTranscript(now, canonicalSessionId);
 
   const messagePrefix = transcript.session_id ?? canonicalSessionId;
+  const transcriptInput = options.transcriptInput ?? request.transcriptInput ?? request.input;
   const nextMessages = [
     ...(transcript.messages ?? []),
-    createTranscriptMessage(`${messagePrefix}-user-${Date.now()}`, 'user', request.input, now, undefined, request.attachments),
+    createTranscriptMessage(`${messagePrefix}-user-${Date.now()}`, 'user', transcriptInput, now, undefined, request.attachments),
   ];
 
   if (output.trim() || toolEvents.length) {
@@ -1044,7 +1061,7 @@ function isMissingPreviousResponseError(status: number, details: string): boolea
 }
 
 export async function streamChat(
-  request: ChatRequest,
+  request: InternalChatRequest,
   handlers: StreamChatHandlers = {},
   options: StreamChatOptions = {},
   executionOptions: ChatExecutionOptions = {},
@@ -1226,7 +1243,7 @@ export async function streamChat(
   return completeEvent;
 }
 
-export async function sendChat(request: ChatRequest, executionOptions: ChatExecutionOptions = {}): Promise<ChatResponse> {
+export async function sendChat(request: InternalChatRequest, executionOptions: ChatExecutionOptions = {}): Promise<ChatResponse> {
   const mode = resolveEffectiveChatMode(request, getChatMode(request.mode));
   const context = createChatTurnContext(request, mode, executionOptions);
   const now = new Date().toISOString();

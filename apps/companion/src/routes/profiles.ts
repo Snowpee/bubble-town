@@ -1,5 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { handleCreateProfile, handleDeleteProfile, getProfilesResponse, handleRenameProfile, handleSwitchProfile } from '../services/profile-service.js';
+import {
+  handleCreateProfile,
+  handleDeleteProfile,
+  getProfilesResponse,
+  handlePrepareProfileForStoryline,
+  handleRenameProfile,
+  handleSwitchProfile,
+} from '../services/profile-service.js';
 import { ensureManagedHermesGateway } from '../services/hermes-gateway.js';
 
 export async function registerProfileRoutes(app: FastifyInstance) {
@@ -75,5 +82,15 @@ export async function registerProfileRoutes(app: FastifyInstance) {
     }
 
     return result;
+  });
+
+  app.post('/api/profiles/:id/prepare-storyline', async (request, reply) => {
+    const params = request.params as { id: string };
+    try {
+      return handlePrepareProfileForStoryline(params.id);
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : '初始化 profile 剧情配置失败。' };
+    }
   });
 }

@@ -15,6 +15,13 @@ const macOSTrafficLightPosition = { x: 16, y: 21 };
 let companionProcess: ChildProcess | null = null;
 let isAppQuitting = false;
 
+interface WindowState {
+  x?: number;
+  y?: number;
+  width: number;
+  height: number;
+}
+
 function getDesktopLogPath() {
   try {
     return path.join(app.getPath('logs'), 'main.log');
@@ -98,6 +105,60 @@ ipcMain.handle('bubble-town:set-native-theme-source', (_event, themeSource: unkn
 
 function getCompanionUrl() {
   return `http://${companionHost}:${companionPort}`;
+}
+
+function getWindowStatePath() {
+  return path.join(app.getPath('userData'), 'window-state.json');
+}
+
+function readWindowState(): WindowState {
+  const fallback: WindowState = { width: 640, height: 920 };
+  const statePath = getWindowStatePath();
+  if (!fs.existsSync(statePath)) {
+    return fallback;
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(statePath, 'utf8')) as Partial<WindowState>;
+    const width = Number(parsed.width);
+    const height = Number(parsed.height);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width < 360 || height < 560) {
+      return fallback;
+    }
+
+    const state: WindowState = { width, height };
+    if (Number.isFinite(parsed.x)) {
+      state.x = Number(parsed.x);
+    }
+    if (Number.isFinite(parsed.y)) {
+      state.y = Number(parsed.y);
+    }
+    return state;
+  } catch (error) {
+    writeMainLog('warn', '[bubble-town] Failed to read window state.', describeError(error));
+    return fallback;
+  }
+}
+
+function saveWindowState(window: BrowserWindow) {
+  if (window.isDestroyed() || window.isMinimized()) {
+    return;
+  }
+
+  try {
+    const bounds = window.getBounds();
+    const state: WindowState = {
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+    };
+    const statePath = getWindowStatePath();
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    writeMainLog('warn', '[bubble-town] Failed to save window state.', describeError(error));
+  }
 }
 
 function getHermesRoot() {
@@ -288,9 +349,12 @@ function createWindow() {
     rendererUrl: process.env.ELECTRON_RENDERER_URL,
   });
 
+  const windowState = readWindowState();
   const mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 920,
+    width: windowState.width,
+    height: windowState.height,
+    ...(windowState.x === undefined ? {} : { x: windowState.x }),
+    ...(windowState.y === undefined ? {} : { y: windowState.y }),
     minWidth: 360,
     minHeight: 560,
     backgroundColor: isMacOS ? '#00000000' : '#09090b',
@@ -313,6 +377,8 @@ function createWindow() {
   if (isMacOS) {
     mainWindow.setWindowButtonPosition(macOSTrafficLightPosition);
   }
+
+  mainWindow.on('close', () => saveWindowState(mainWindow));
 
   if (isDev && process.env.ELECTRON_RENDERER_URL) {
     void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);

@@ -262,6 +262,29 @@
     animation-delay: 280ms;
   }
 
+  .story-composer-glow {
+    position: relative;
+    isolation: isolate;
+    overflow: visible;
+    --story-composer-shadow-secondary: oklch(from var(--primary) l c calc(h + 80));
+  }
+
+  .story-composer-glow::before {
+    content: "";
+    position: absolute;
+    inset: 22% 8% 0%;
+    z-index: -2;
+    pointer-events: none;
+    border-radius: inherit;
+    box-shadow:
+      -2rem -2rem 6rem 0rem color-mix(in oklab, var(--primary) 25%, transparent),
+      2rem -2rem 6rem 0rem color-mix(in oklab, var(--story-composer-shadow-secondary) 80%, transparent),
+      0 2rem 6rem 0rem color-mix(in oklab, var(--primary) 30%, transparent);
+    opacity: 0.9;
+    transform: translate3d(0, 0, 0);
+    animation: story-composer-shadow-breathe 6.8s ease-in-out infinite;
+  }
+
   @keyframes activity-status-enter {
     from {
       opacity: 0;
@@ -295,6 +318,18 @@
     }
   }
 
+  @keyframes story-composer-shadow-breathe {
+    0%,
+    100% {
+      opacity: 0.74;
+      transform: scale(0.98);
+    }
+    50% {
+      opacity: 0.96;
+      transform: scale(1);
+    }
+  }
+
   .app-drag-region {
     app-region: drag;
     -webkit-app-region: drag;
@@ -305,5 +340,226 @@
   .app-drag-region :where(a, button, input, textarea, select, option, [role='button'], [role='menuitem'], [role='tab'], [contenteditable='true']) {
     app-region: no-drag;
     -webkit-app-region: no-drag;
+  }
+}
+
+@layer components {
+  .companion-page {
+    position: relative;
+    isolation: isolate;
+    color: var(--foreground);
+    background:
+      radial-gradient(circle at 72% 42%, color-mix(in srgb, var(--companion-page-glow, rgba(255, 240, 229, 0.92)), white 42%) 0%, color-mix(in srgb, var(--companion-page-glow, rgba(255, 218, 195, 0.32)), transparent 54%) 30%, transparent 62%),
+      radial-gradient(ellipse at 78% 84%, var(--companion-aura-deep, rgba(223, 125, 87, 0.16)) 0%, color-mix(in srgb, var(--companion-accent, #df7d57), transparent 92%) 36%, transparent 72%),
+      linear-gradient(135deg, var(--companion-bg-start, #fffaf6) 0%, var(--companion-bg-middle, #fff1e8) 46%, var(--companion-bg-end, #f4c9b6) 100%);
+  }
+
+  .companion-page--home {
+    min-height: 100%;
+  }
+
+  .companion-page--interior {
+    min-height: 0;
+  }
+
+  .companion-window-bar {
+    color: var(--foreground);
+  }
+
+  .companion-brand {
+    color: var(--foreground);
+  }
+
+  .companion-brand__mark {
+    border-color: var(--companion-accent, #df7d57);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--companion-accent, #df7d57), transparent 84%);
+  }
+
+  .companion-aura {
+    pointer-events: none;
+    position: absolute;
+    z-index: 1;
+    border-radius: 999px;
+    mix-blend-mode: screen;
+  }
+
+  .companion-aura--main {
+    right: 5%;
+    top: 18%;
+    width: min(44vw, 430px);
+    height: min(44vw, 430px);
+    background:
+      radial-gradient(circle at 45% 42%, rgba(255, 255, 255, 0.52) 0%, color-mix(in srgb, var(--companion-aura, rgba(255, 186, 139, 0.34)), white 16%) 18%, var(--companion-aura, rgba(255, 186, 139, 0.34)) 38%, var(--companion-aura-deep, rgba(211, 102, 70, 0.16)) 58%, transparent 100%);
+    filter: blur(40px);
+    opacity: 0.78;
+    animation: companion-aura-main 13s ease-in-out infinite;
+  }
+
+  .companion-aura--lower {
+    right: -8%;
+    bottom: -16%;
+    width: min(80vw, 780px);
+    height: min(42vw, 380px);
+    background: radial-gradient(ellipse at center, var(--companion-aura-deep, rgba(223, 125, 87, 0.16)) 0%, color-mix(in srgb, var(--companion-accent, #df7d57), transparent 92%) 40%, transparent 76%);
+    filter: blur(52px);
+    opacity: 0.84;
+    animation: companion-aura-lower 16s ease-in-out infinite;
+  }
+
+  .companion-flow-grid {
+    pointer-events: none;
+    position: absolute;
+    inset: auto 0 0;
+    z-index: 2;
+    height: 38%;
+    opacity: 0.45;
+    background-image:
+      linear-gradient(var(--companion-grid, rgba(223, 125, 87, 0.16)) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--companion-grid, rgba(223, 125, 87, 0.16)), transparent 18%) 1px, transparent 1px);
+    background-size: 64px 34px;
+    mask-image: linear-gradient(to bottom, transparent, black 38%, transparent);
+    transform: perspective(520px) rotateX(58deg) translateY(18%);
+    transform-origin: bottom center;
+  }
+
+  .companion-shape-blur {
+    pointer-events: none;
+    position: absolute;
+    right: -7%;
+    top: 13%;
+    z-index: 3;
+    width: min(58vw, 620px);
+    height: min(58vw, 620px);
+    opacity: 0.32;
+    filter: blur(0.2px) drop-shadow(0 30px 58px var(--companion-glow-shadow, rgba(223, 125, 87, 0.16)));
+    mix-blend-mode: multiply;
+    mask-image: radial-gradient(circle at 50% 50%, black 0%, black 58%, transparent 78%);
+  }
+
+  .companion-shape-blur canvas {
+    display: block;
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  .companion-glass {
+    border: 1px solid var(--border);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--card), white 16%), color-mix(in srgb, var(--card), transparent 38%));
+    box-shadow:
+      0 26px 70px var(--companion-glass-shadow, color-mix(in srgb, var(--foreground), transparent 92%)),
+      inset 0 1px 0 rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(26px) saturate(1.12);
+    -webkit-backdrop-filter: blur(26px) saturate(1.12);
+  }
+
+  .companion-primary-action {
+    display: flex;
+    min-height: 104px;
+    align-items: center;
+    gap: 18px;
+    border: 1px solid var(--border);
+    border-radius: 28px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--card), white 22%), color-mix(in srgb, var(--card), transparent 30%));
+    padding: 22px 24px;
+    color: var(--foreground);
+    text-align: left;
+    box-shadow:
+      0 28px 76px var(--companion-glass-shadow, color-mix(in srgb, var(--foreground), transparent 90%)),
+      inset 0 1px 0 rgba(255, 255, 255, 0.78);
+    backdrop-filter: blur(28px) saturate(1.12);
+    -webkit-backdrop-filter: blur(28px) saturate(1.12);
+    transition:
+      transform 200ms ease,
+      box-shadow 200ms ease,
+      background 200ms ease;
+  }
+
+  .companion-primary-action:hover:not(:disabled) {
+    transform: translateY(-3px);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--card), white 32%), color-mix(in srgb, var(--card), transparent 18%));
+    box-shadow:
+      0 34px 88px var(--companion-glass-shadow, color-mix(in srgb, var(--foreground), transparent 86%)),
+      inset 0 1px 0 rgba(255, 255, 255, 0.86);
+  }
+
+  .companion-primary-action__icon {
+    display: grid;
+    width: 58px;
+    height: 58px;
+    flex: 0 0 auto;
+    place-items: center;
+    border-radius: 999px;
+    background:
+      radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.44), transparent 42%),
+      linear-gradient(135deg, var(--primary), var(--companion-accent-deep, #b95f44));
+    color: white;
+    box-shadow:
+      0 14px 28px var(--companion-accent-soft, rgba(223, 125, 87, 0.22)),
+      inset 0 1px 0 rgba(255, 255, 255, 0.36);
+  }
+
+  .companion-primary-action strong {
+    display: block;
+    font-size: 1.25rem;
+    font-weight: 650;
+    line-height: 1.2;
+  }
+
+  .companion-primary-action small {
+    margin-top: 0.45rem;
+    display: block;
+    color: var(--muted-foreground);
+    font-size: 0.875rem;
+    line-height: 1.45;
+  }
+
+  .companion-chat-panel {
+    border: 1px solid var(--border);
+    background: color-mix(in srgb, var(--card), transparent 46%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.48);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
+}
+
+@keyframes companion-aura-main {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.72;
+    filter: blur(40px);
+  }
+  45% {
+    transform: translate3d(-18px, -12px, 0) scale(1.08);
+    opacity: 0.9;
+    filter: blur(48px);
+  }
+  72% {
+    transform: translate3d(12px, 8px, 0) scale(0.96);
+    opacity: 0.76;
+    filter: blur(44px);
+  }
+}
+
+@keyframes companion-aura-lower {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+    opacity: 0.66;
+  }
+  50% {
+    transform: translate3d(-28px, -12px, 0) scale(1.08);
+    opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .companion-aura--main,
+  .companion-aura--lower {
+    animation: none;
+  }
+
+  .companion-shape-blur {
+    opacity: 0.22;
   }
 }

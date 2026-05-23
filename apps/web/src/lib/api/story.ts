@@ -12,6 +12,8 @@ import type {
   CreateSuppressedMemoryRequest,
   MemoriesResponse,
   MemoryRecord,
+  ProfileContinuityValidationResponse,
+  RelativeTimeSearchResponse,
   SuppressedMemoriesResponse,
   SuppressedMemory,
   Storyline,
@@ -65,12 +67,16 @@ export function setActiveStoryline(id: string) {
   return apiPost<ActiveStorylineResponse>(`/api/storylines/${encodeURIComponent(id)}/set-active`, {});
 }
 
+export function activateStorylineForProfile(profileId: string) {
+  return apiPost<ActiveStorylineResponse>('/api/storylines/activate-profile', { profileId });
+}
+
 export function archiveStoryline(id: string) {
   return apiPost<Storyline>(`/api/storylines/${encodeURIComponent(id)}/archive`, {});
 }
 
-export function previewContextPack(storylineId: string) {
-  return apiPost<ContextPreviewResponse>('/api/context/preview', { storylineId });
+export function previewContextPack(storylineId: string, input?: string) {
+  return apiPost<ContextPreviewResponse>('/api/context/preview', { storylineId, input });
 }
 
 export function sendStorylineChat(request: StorylineChatRequest) {
@@ -127,6 +133,14 @@ export function updateActivityLog(id: string, request: UpdateActivityLogRequest)
 
 export function hideActivityLog(id: string) {
   return apiPost<ActivityLog>(`/api/activity/${encodeURIComponent(id)}/hide`, {});
+}
+
+export function searchStorylineRelativeTime(storylineId: string, input: string) {
+  return apiPost<RelativeTimeSearchResponse>(`/api/storylines/${encodeURIComponent(storylineId)}/relative-time-search`, { input });
+}
+
+export function validateStorylineProfileContinuity(storylineId: string) {
+  return apiPost<ProfileContinuityValidationResponse>(`/api/storylines/${encodeURIComponent(storylineId)}/profile/validate-continuity`, {});
 }
 
 interface StreamStorylineChatHandlers {

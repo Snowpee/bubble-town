@@ -8,6 +8,8 @@ import { resetManagedHermesGatewayStateForTests, setManagedHermesGatewayProfileF
 import {
   createCharacter,
   createStoryline,
+  listAllActivityLogs,
+  listAllMemoryRecords,
   getRuntimeSessionForStoryline,
   resetStoryRuntimeForTests,
 } from './story-runtime-store.js';
@@ -79,8 +81,56 @@ test('sendStorylineChat 解析 Storyline profile 并写入 RuntimeSession', asyn
     assert.equal(getRuntimeSessionForStoryline(storyline.id)?.previousResponseId, 'resp-story-1');
     const chatCall = fetchCalls.find((call) => call.url.endsWith('/responses'));
     assert.equal(chatCall?.url, 'http://127.0.0.1:9651/v1/responses');
-    assert.match(String(chatCall?.payload.input), /BubbleTownContextPack/);
-    assert.match(String(chatCall?.payload.input), /你在吗？/);
+    assert.equal(chatCall?.payload.input, '你在吗？');
+    assert.match(String(chatCall?.payload.instructions), /BubbleTownContextPack/);
+    assert.doesNotMatch(String(chatCall?.payload.input), /BubbleTownContextPack/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('sendStorylineChat 完成后自动写入活动日志和用户记忆', async () => {
+  const hermesHome = createHermesHome();
+  const originalFetch = globalThis.fetch;
+
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({
+      id: 'resp-story-memory',
+      model: 'hermes-agent',
+      output: [
+        {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: '人家记住啦。' }],
+        },
+      ],
+    }),
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Hermes-Session-Id': 'story-session-memory',
+      },
+    },
+  );
+
+  try {
+    setManagedHermesGatewayProfileForTests('sami-story-001', 'http://127.0.0.1:9651/v1');
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-001',
+      title: '初遇',
+    });
+
+    await sendStorylineChat({
+      storylineId: storyline.id,
+      input: '记住，我喜欢晚饭后散步，以后别忘。',
+    });
+
+    assert.equal(listAllActivityLogs(storyline.id).length, 1);
+    assert.match(listAllMemoryRecords(storyline.id)[0]?.content ?? '', /晚饭后散步/);
   } finally {
     globalThis.fetch = originalFetch;
     cleanupHermesHome(hermesHome);

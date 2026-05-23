@@ -1,5 +1,5 @@
 import type { CreateProfileRequest, ProfilesResponse, ProfileSummary, SwitchProfileRequest, UpdateProfileRequest } from '@bubble-town/shared';
-import { createProfile, listProfiles, removeProfile, renameProfile, setActiveProfile } from './profile-store.js';
+import { createProfile, listProfiles, prepareProfileForStoryline, removeProfile, renameProfile, setActiveProfile } from './profile-store.js';
 import { listSessions } from './session-store.js';
 
 export function getProfilesResponse(): ProfilesResponse {
@@ -28,4 +28,8 @@ export function handleSwitchProfile(input: SwitchProfileRequest) {
     activeProfile,
     sessions: listSessions(input.profileId),
   };
+}
+
+export function handlePrepareProfileForStoryline(profileId: string) {
+  return prepareProfileForStoryline(profileId);
 }

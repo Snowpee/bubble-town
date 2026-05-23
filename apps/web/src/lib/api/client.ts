@@ -20,7 +20,16 @@ export const COMPANION_URL =
 
 async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    let message = `Request failed: ${response.status}`;
+    try {
+      const payload = await response.json() as { message?: unknown };
+      if (typeof payload.message === 'string' && payload.message.trim()) {
+        message = payload.message;
+      }
+    } catch {
+      // Keep the generic HTTP status when the response body is not JSON.
+    }
+    throw new Error(message);
   }
 
   if (response.status === 204) {

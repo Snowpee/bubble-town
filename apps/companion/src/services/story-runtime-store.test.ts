@@ -6,10 +6,13 @@ import path from 'node:path';
 import {
   createCharacter,
   createStoryline,
+  clearRuntimeSessionContinuation,
   getActiveStoryline,
+  getActiveStorylineForProfile,
   getRuntimeSessionForStoryline,
   resetStoryRuntimeForTests,
   setActiveStoryline,
+  setActiveStorylineForProfile,
   upsertRuntimeSession,
 } from './story-runtime-store.js';
 
@@ -42,6 +45,39 @@ test('创建 Storyline 时设置 active，并拒绝重复绑定同一个 Hermes 
       () => createStoryline({ characterId: character.id, hermesProfileId: 'sami-story-001', title: '重复剧情' }),
       /已绑定/,
     );
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('可以清空 RuntimeSession 续链并保留同一运行记录用于 context rollover', () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-001',
+      title: '初遇',
+    });
+    const created = upsertRuntimeSession({
+      storylineId: storyline.id,
+      hermesProfileId: storyline.hermesProfileId,
+      hermesSessionId: 'session-1',
+      previousResponseId: 'resp-1',
+      reason: 'continue',
+    });
+
+    const cleared = clearRuntimeSessionContinuation({
+      storylineId: storyline.id,
+      hermesProfileId: storyline.hermesProfileId,
+      reason: 'context_rollover',
+    });
+
+    assert.equal(cleared.id, created.id);
+    assert.equal(cleared.hermesSessionId, undefined);
+    assert.equal(cleared.previousResponseId, undefined);
+    assert.equal(cleared.reason, 'context_rollover');
   } finally {
     cleanupHermesHome(hermesHome);
   }
@@ -99,6 +135,33 @@ test('可以显式切换 active Storyline', () => {
     assert.equal(getActiveStoryline()?.id, second.id);
     assert.equal(setActiveStoryline(first.id)?.id, first.id);
     assert.equal(getActiveStoryline()?.id, first.id);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('可以按 Hermes profile 切换 active Storyline，未找到时清空 active', () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const first = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-001',
+      title: '初遇',
+    });
+    const second = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-002',
+      title: '重启',
+    });
+
+    assert.equal(getActiveStoryline()?.id, second.id);
+    assert.equal(getActiveStorylineForProfile(first.hermesProfileId)?.id, first.id);
+    assert.equal(setActiveStorylineForProfile(first.hermesProfileId)?.id, first.id);
+    assert.equal(getActiveStoryline()?.id, first.id);
+    assert.equal(setActiveStorylineForProfile('missing-profile'), undefined);
+    assert.equal(getActiveStoryline(), undefined);
   } finally {
     cleanupHermesHome(hermesHome);
   }

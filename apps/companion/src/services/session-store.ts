@@ -197,6 +197,30 @@ function describeMessagePreview(parts: MessageParts): string {
   return '';
 }
 
+function extractUserMessageFromInjectedInput(content: string): string {
+  const startTag = '<UserMessage>';
+  const endTag = '</UserMessage>';
+  const startIndex = content.lastIndexOf(startTag);
+  const endIndex = content.lastIndexOf(endTag);
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    return content;
+  }
+
+  return content.slice(startIndex + startTag.length, endIndex).trim();
+}
+
+function sanitizeTranscriptText(role: ChatMessage['role'], content: string): string {
+  if (role !== 'user') {
+    return content;
+  }
+
+  if (!content.includes('<BubbleTownContextPack>') && !content.includes('<UserMessage>')) {
+    return content;
+  }
+
+  return extractUserMessageFromInjectedInput(content);
+}
+
 function summarizeText(value: string, maxLength = 96): string {
   const trimmed = value.replace(/\s+/g, ' ').trim();
   if (trimmed.length <= maxLength) {
@@ -451,11 +475,12 @@ function mapTranscriptMessages(record: StoredSessionRecord): ChatMessage[] {
 
   return messages
     .map((message, index) => {
+      const role = normalizeRole(message.role);
       const parts = extractMessageParts(message.content, message.attachments);
       return {
         id: message.id ?? `${messageSeed}-${index + 1}`,
-        role: normalizeRole(message.role),
-        content: parts.text,
+        role,
+        content: sanitizeTranscriptText(role, parts.text),
         attachments: parts.attachments.length ? parts.attachments : undefined,
         createdAt: typeof message.created_at === 'string' ? message.created_at : toIso(message.timestamp ?? defaultTimestamp),
         toolEvents: Array.isArray(message.tool_events) ? message.tool_events : undefined,

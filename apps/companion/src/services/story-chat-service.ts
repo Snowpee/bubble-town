@@ -11,12 +11,19 @@ import type {
 import { sendChat, streamChat } from './hermes-api.js';
 import { ensureManagedHermesGateway } from './hermes-gateway.js';
 import { buildContextPack, renderContextPackInstructions } from './context-pack.js';
+import { recordStorylineTurnContinuity } from './story-memory-continuity.js';
+import { rolloverStoryRuntimeSessionIfNeeded } from './story-session-rollover.js';
 import {
   getRuntimeSessionForStoryline,
   getStoryline,
   touchStorylineInteraction,
   upsertRuntimeSession,
 } from './story-runtime-store.js';
+
+type StorylineHermesChatRequest = Omit<StorylineChatRequest, 'storylineId'> & {
+  transcriptInput: string;
+  runtimeInstructions: string;
+};
 
 interface StreamStorylineChatHandlers {
   onStart?: (event: StorylineChatStreamStartEvent) => void;
@@ -37,8 +44,14 @@ function resolveStorylineOrThrow(storylineId: string) {
   return storyline;
 }
 
-function buildInjectedInput(contextInstructions: string, input: string): string {
-  return `${contextInstructions}\n\n<UserMessage>\n${input}\n</UserMessage>`;
+function buildStorylineChatRequest(request: StorylineChatRequest, contextInstructions: string): StorylineHermesChatRequest {
+  return {
+    input: request.input,
+    transcriptInput: request.input,
+    runtimeInstructions: contextInstructions,
+    attachments: request.attachments,
+    mode: request.mode,
+  };
 }
 
 export function previewContextPack(storylineId: string): ContextPreviewResponse {
@@ -49,18 +62,26 @@ export function previewContextPack(storylineId: string): ContextPreviewResponse 
   };
 }
 
+export function previewContextPackForInput(storylineId: string, input?: string): ContextPreviewResponse {
+  const contextPack = buildContextPack(storylineId, { input });
+  return {
+    contextPack,
+    renderedInstructions: renderContextPackInstructions(contextPack),
+  };
+}
+
 export async function sendStorylineChat(request: StorylineChatRequest): Promise<StorylineChatResponse> {
   const storyline = resolveStorylineOrThrow(request.storylineId);
-  const runtimeSession = getRuntimeSessionForStoryline(storyline.id);
-  const preview = previewContextPack(storyline.id);
+  const runtimeSession = rolloverStoryRuntimeSessionIfNeeded(storyline, getRuntimeSessionForStoryline(storyline.id));
+  const preview = previewContextPackForInput(storyline.id, request.input);
   const gateway = await ensureManagedHermesGateway(storyline.hermesProfileId);
+  const chatRequest = buildStorylineChatRequest(request, preview.renderedInstructions);
   const response = await sendChat({
-    input: buildInjectedInput(preview.renderedInstructions, request.input),
+    ...chatRequest,
     attachments: request.attachments,
     profileId: storyline.hermesProfileId,
     sessionId: runtimeSession?.hermesSessionId,
     responseId: runtimeSession?.previousResponseId,
-    mode: request.mode,
   }, {
     apiBaseUrl: gateway.apiBaseUrl,
     managedGatewayProfileId: gateway.profileId,
@@ -73,6 +94,12 @@ export async function sendStorylineChat(request: StorylineChatRequest): Promise<
     reason: runtimeSession ? 'continue' : 'storyline_start',
   });
   touchStorylineInteraction(storyline.id);
+  recordStorylineTurnContinuity({
+    storyline,
+    userInput: request.input,
+    assistantOutput: response.output,
+    sourceMessageIds: [response.sessionId, response.responseId].filter((value): value is string => Boolean(value)),
+  });
 
   return {
     ...response,
@@ -87,22 +114,23 @@ export async function streamStorylineChat(
   options: StreamStorylineChatOptions = {},
 ): Promise<StorylineChatResponse> {
   const storyline = resolveStorylineOrThrow(request.storylineId);
-  const runtimeSession = getRuntimeSessionForStoryline(storyline.id);
-  const preview = previewContextPack(storyline.id);
+  const runtimeSession = rolloverStoryRuntimeSessionIfNeeded(storyline, getRuntimeSessionForStoryline(storyline.id));
+  const preview = previewContextPackForInput(storyline.id, request.input);
   const gateway = await ensureManagedHermesGateway(storyline.hermesProfileId);
+  let continuityRecorded = false;
   let currentRuntimeSession = runtimeSession ?? upsertRuntimeSession({
     storylineId: storyline.id,
     hermesProfileId: storyline.hermesProfileId,
     reason: 'storyline_start',
   });
 
+  const chatRequest = buildStorylineChatRequest(request, preview.renderedInstructions);
   const response = await streamChat({
-    input: buildInjectedInput(preview.renderedInstructions, request.input),
+    ...chatRequest,
     attachments: request.attachments,
     profileId: storyline.hermesProfileId,
     sessionId: currentRuntimeSession.hermesSessionId,
     responseId: currentRuntimeSession.previousResponseId,
-    mode: request.mode,
   }, {
     onStart: (event: ChatStreamStartEvent) => {
       currentRuntimeSession = upsertRuntimeSession({
@@ -129,6 +157,15 @@ export async function streamStorylineChat(
         reason: runtimeSession ? 'continue' : 'storyline_start',
       });
       touchStorylineInteraction(storyline.id);
+      if (!continuityRecorded) {
+        recordStorylineTurnContinuity({
+          storyline,
+          userInput: request.input,
+          assistantOutput: event.output,
+          sourceMessageIds: [event.sessionId, event.responseId].filter((value): value is string => Boolean(value)),
+        });
+        continuityRecorded = true;
+      }
       handlers.onComplete?.({
         ...event,
         storylineId: storyline.id,
@@ -148,6 +185,14 @@ export async function streamStorylineChat(
     reason: runtimeSession ? 'continue' : 'storyline_start',
   });
   touchStorylineInteraction(storyline.id);
+  if (!continuityRecorded) {
+    recordStorylineTurnContinuity({
+      storyline,
+      userInput: request.input,
+      assistantOutput: response.output,
+      sourceMessageIds: [response.sessionId, response.responseId].filter((value): value is string => Boolean(value)),
+    });
+  }
 
   return {
     ...response,

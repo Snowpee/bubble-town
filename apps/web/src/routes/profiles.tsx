@@ -133,17 +133,20 @@ export function ProfilesRoute() {
 
   return (
     <>
-      <div>
+      <div className="companion-page companion-page--interior min-h-full overflow-hidden">
+        <div className="companion-aura companion-aura--main" aria-hidden="true" />
+        <div className="companion-aura companion-aura--lower" aria-hidden="true" />
         <PageTitlebar
+          className="companion-chat-panel relative z-10 border-b-0"
           title={<h2 className="truncate text-base font-semibold tracking-tight">Profile 管理</h2>}
           actions={
-          <Button type="button" variant="outline" size="sm" className="rounded-xl" onClick={openCreateDialog}>
+          <Button type="button" variant="outline" size="sm" className="rounded-xl border-border bg-card/60 text-foreground hover:bg-card" onClick={openCreateDialog}>
             <Plus className="h-4 w-4" />
             <span className="ml-2">新建 Profile</span>
           </Button>
           }
         />
-        <div className="space-y-4 p-4 lg:p-6">
+        <div className="relative z-10 space-y-4 p-4 lg:p-6">
           {isLoading ? (
             <>
               <LoadingLabel />
@@ -152,7 +155,7 @@ export function ProfilesRoute() {
           ) : (
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
               {(profilesQuery.data?.profiles ?? []).map((profile) => (
-                <div key={profile.id} className="rounded-3xl border border-border bg-card p-4">
+                <div key={profile.id} className="companion-glass rounded-3xl p-4">
                   <div className="flex items-center justify-between">
                     <div>
                       <div className="font-medium">{profile.name}</div>

@@ -6,7 +6,10 @@ import type {
   StorylineChatStreamCompleteEvent,
   StorylineChatStreamStartEvent,
 } from '@bubble-town/shared';
-import { previewContextPack, sendStorylineChat, streamStorylineChat } from '../services/story-chat-service.js';
+import { previewContextPack, previewContextPackForInput, sendStorylineChat, streamStorylineChat } from '../services/story-chat-service.js';
+import { searchRelativeTime } from '../services/relative-time-search.js';
+import { buildTimeContext } from '../services/context-pack.js';
+import { validateProfileContinuity } from '../services/profile-continuity.js';
 import {
   createActivityLog,
   createMemoryRecord,
@@ -21,6 +24,7 @@ import {
   listAllSuppressedMemories,
   listStorylines,
   setActiveStoryline,
+  setActiveStorylineForProfile,
   updateActivityLog,
   updateMemoryRecord,
   updateStoryline,
@@ -95,6 +99,17 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
     return { activeStoryline: storyline };
   });
 
+  app.post('/api/storylines/activate-profile', async (request, reply) => {
+    const body = request.body as { profileId?: string };
+    const profileId = body.profileId?.trim();
+    if (!profileId) {
+      reply.code(400);
+      return { message: 'Hermes profile 不能为空。' };
+    }
+
+    return { activeStoryline: setActiveStorylineForProfile(profileId) };
+  });
+
   app.post('/api/storylines/:id/archive', async (request, reply) => {
     const params = request.params as { id: string };
     const storyline = updateStoryline(params.id, { status: 'archived' });
@@ -120,12 +135,39 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
 
   app.post('/api/storylines/:id/context/preview', async (request, reply) => {
     const params = request.params as { id: string };
+    const body = request.body as { input?: string } | undefined;
     try {
-      return previewContextPack(params.id);
+      return previewContextPackForInput(params.id, body?.input);
     } catch (error) {
       reply.code(400);
       return { message: error instanceof Error ? error.message : '生成 ContextPack 预览失败。' };
     }
+  });
+
+  app.post('/api/storylines/:id/relative-time-search', async (request, reply) => {
+    const params = request.params as { id: string };
+    const body = request.body as { input?: string };
+    const storyline = getStoryline(params.id);
+    if (!storyline) {
+      reply.code(404);
+      return { message: '未找到目标剧情。' };
+    }
+    const input = body.input?.trim();
+    if (!input) {
+      reply.code(400);
+      return { message: '检索输入不能为空。' };
+    }
+    return { results: searchRelativeTime(storyline.id, input, buildTimeContext(storyline.lastInteractionAt)) };
+  });
+
+  app.post('/api/storylines/:id/profile/validate-continuity', async (request, reply) => {
+    const params = request.params as { id: string };
+    const storyline = getStoryline(params.id);
+    if (!storyline) {
+      reply.code(404);
+      return { message: '未找到目标剧情。' };
+    }
+    return validateProfileContinuity(storyline.hermesProfileId);
   });
 
   app.get('/api/storylines/:id/memories', async (request, reply) => {
@@ -255,9 +297,9 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
   });
 
   app.post('/api/context/preview', async (request, reply) => {
-    const body = request.body as { storylineId: string };
+    const body = request.body as { storylineId: string; input?: string };
     try {
-      return previewContextPack(body.storylineId);
+      return previewContextPackForInput(body.storylineId, body.input);
     } catch (error) {
       reply.code(400);
       return { message: error instanceof Error ? error.message : '生成 ContextPack 预览失败。' };

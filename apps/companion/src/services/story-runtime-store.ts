@@ -150,6 +150,15 @@ export function getActiveStoryline(): Storyline | undefined {
   return data.storylines.find((storyline) => storyline.id === data.activeStorylineId && storyline.status === 'active');
 }
 
+export function getActiveStorylineForProfile(hermesProfileId: string): Storyline | undefined {
+  const profileId = hermesProfileId.trim();
+  if (!profileId) {
+    return undefined;
+  }
+
+  return readData().storylines.find((storyline) => storyline.hermesProfileId === profileId && storyline.status === 'active');
+}
+
 export function getStoryline(id: string): Storyline | undefined {
   return readData().storylines.find((storyline) => storyline.id === id);
 }
@@ -240,6 +249,25 @@ export function setActiveStoryline(id: string): Storyline | undefined {
   return storyline;
 }
 
+export function setActiveStorylineForProfile(hermesProfileId: string): Storyline | undefined {
+  const profileId = hermesProfileId.trim();
+  if (!profileId) {
+    return undefined;
+  }
+
+  const data = readData();
+  const storyline = data.storylines.find((entry) => entry.hermesProfileId === profileId && entry.status === 'active');
+  if (!storyline) {
+    data.activeStorylineId = undefined;
+    writeData(data);
+    return undefined;
+  }
+
+  data.activeStorylineId = storyline.id;
+  writeData(data);
+  return storyline;
+}
+
 export function getRuntimeSessionForStoryline(storylineId: string): RuntimeSession | undefined {
   return readData()
     .runtimeSessions
@@ -279,6 +307,43 @@ export function upsertRuntimeSession(input: {
     hermesProfileId: input.hermesProfileId,
     hermesSessionId: input.hermesSessionId,
     previousResponseId: input.previousResponseId,
+    reason: input.reason,
+    createdAt: now,
+    updatedAt: now,
+  };
+  data.runtimeSessions.push(created);
+  writeData(data);
+  return created;
+}
+
+export function clearRuntimeSessionContinuation(input: {
+  storylineId: string;
+  hermesProfileId: string;
+  reason: RuntimeSession['reason'];
+}): RuntimeSession {
+  const data = readData();
+  const existingIndex = data.runtimeSessions.findIndex((session) => session.storylineId === input.storylineId);
+  const now = nowIso();
+
+  if (existingIndex !== -1) {
+    const current = data.runtimeSessions[existingIndex]!;
+    const updated: RuntimeSession = {
+      ...current,
+      hermesProfileId: input.hermesProfileId,
+      hermesSessionId: undefined,
+      previousResponseId: undefined,
+      reason: input.reason,
+      updatedAt: now,
+    };
+    data.runtimeSessions[existingIndex] = updated;
+    writeData(data);
+    return updated;
+  }
+
+  const created: RuntimeSession = {
+    id: createId('runtime'),
+    storylineId: input.storylineId,
+    hermesProfileId: input.hermesProfileId,
     reason: input.reason,
     createdAt: now,
     updatedAt: now,
@@ -346,11 +411,22 @@ export function createMemoryRecord(storylineId: string, input: CreateMemoryReque
     scope: input.scope ?? 'story',
     source: input.source ?? 'manual',
     status: 'active',
+    kind: input.kind,
+    lifespan: input.lifespan,
+    reason: input.reason?.trim() || undefined,
     importance: input.importance,
     confidence: input.confidence,
     createdAt: now,
     updatedAt: now,
     sourceMessageIds: input.sourceMessageIds,
+    supersedes: input.supersedes,
+    supersededBy: input.supersededBy,
+    lastAccessedAt: input.lastAccessedAt,
+    accessCount: input.accessCount,
+    embeddingRef: input.embeddingRef,
+    embeddingModel: input.embeddingModel,
+    embeddingText: input.embeddingText,
+    embeddingUpdatedAt: input.embeddingUpdatedAt,
   };
   data.memoryRecords.push(memory);
   writeData(data);
@@ -370,9 +446,20 @@ export function updateMemoryRecord(id: string, input: UpdateMemoryRequest): Memo
     scope: input.scope ?? current.scope,
     source: input.source ?? current.source,
     status: input.status ?? current.status,
+    kind: input.kind ?? current.kind,
+    lifespan: input.lifespan ?? current.lifespan,
+    reason: input.reason === undefined ? current.reason : input.reason.trim() || undefined,
     importance: input.importance ?? current.importance,
     confidence: input.confidence ?? current.confidence,
     sourceMessageIds: input.sourceMessageIds ?? current.sourceMessageIds,
+    supersedes: input.supersedes ?? current.supersedes,
+    supersededBy: input.supersededBy ?? current.supersededBy,
+    lastAccessedAt: input.lastAccessedAt ?? current.lastAccessedAt,
+    accessCount: input.accessCount ?? current.accessCount,
+    embeddingRef: input.embeddingRef ?? current.embeddingRef,
+    embeddingModel: input.embeddingModel ?? current.embeddingModel,
+    embeddingText: input.embeddingText ?? current.embeddingText,
+    embeddingUpdatedAt: input.embeddingUpdatedAt ?? current.embeddingUpdatedAt,
     updatedAt: nowIso(),
   };
   data.memoryRecords[index] = updated;
@@ -471,6 +558,10 @@ export function createActivityLog(storylineId: string, input: CreateActivityLogR
     tags: input.tags ?? [],
     status: 'active',
     sourceMessageIds: input.sourceMessageIds,
+    embeddingRef: input.embeddingRef,
+    embeddingModel: input.embeddingModel,
+    embeddingText: input.embeddingText,
+    embeddingUpdatedAt: input.embeddingUpdatedAt,
   };
   data.activityLogs.push(activity);
   writeData(data);
@@ -492,6 +583,10 @@ export function updateActivityLog(id: string, input: UpdateActivityLogRequest): 
     tags: input.tags ?? current.tags,
     status: input.status ?? current.status,
     sourceMessageIds: input.sourceMessageIds ?? current.sourceMessageIds,
+    embeddingRef: input.embeddingRef ?? current.embeddingRef,
+    embeddingModel: input.embeddingModel ?? current.embeddingModel,
+    embeddingText: input.embeddingText ?? current.embeddingText,
+    embeddingUpdatedAt: input.embeddingUpdatedAt ?? current.embeddingUpdatedAt,
   };
   data.activityLogs[index] = updated;
   writeData(data);

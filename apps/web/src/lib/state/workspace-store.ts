@@ -1,11 +1,13 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { DEFAULT_PROFILE_ID } from '@bubble-town/shared';
+import type { CompanionThemeName } from '@/lib/companion-theme';
 
 interface WorkspaceState {
   activeProfileId: string;
   activeStorylineId?: string;
   chatMode: 'responses' | 'chat-completions';
+  companionTheme: CompanionThemeName;
   assistantMessageViewMode: 'bubble' | 'document';
   sidebarCollapsed: boolean;
   sidebarWidth: number;
@@ -13,6 +15,7 @@ interface WorkspaceState {
   setActiveProfileId: (profileId: string) => void;
   setActiveStorylineId: (storylineId?: string) => void;
   setChatMode: (chatMode: 'responses' | 'chat-completions') => void;
+  setCompanionTheme: (companionTheme: CompanionThemeName) => void;
   setAssistantMessageViewMode: (viewMode: 'bubble' | 'document') => void;
   setSidebarCollapsed: (sidebarCollapsed: boolean) => void;
   setSidebarWidth: (sidebarWidth: number) => void;
@@ -35,6 +38,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       activeProfileId: DEFAULT_PROFILE_ID,
       activeStorylineId: undefined,
       chatMode: 'responses',
+      companionTheme: 'warmPeach',
       assistantMessageViewMode: 'bubble',
       sidebarCollapsed: false,
       sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
@@ -42,6 +46,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       setActiveProfileId: (activeProfileId) => set({ activeProfileId }),
       setActiveStorylineId: (activeStorylineId) => set({ activeStorylineId }),
       setChatMode: (chatMode) => set({ chatMode }),
+      setCompanionTheme: (companionTheme) => set({ companionTheme }),
       setAssistantMessageViewMode: (assistantMessageViewMode) => set({ assistantMessageViewMode }),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       setSidebarWidth: (sidebarWidth) => set({ sidebarWidth: normalizeSidebarWidth(sidebarWidth) }),
@@ -65,12 +70,16 @@ export const useWorkspaceStore = create<WorkspaceState>()(
             typeof persistedState.activeStorylineId === 'string' && persistedState.activeStorylineId.trim()
               ? persistedState.activeStorylineId
               : undefined,
+          companionTheme: ['warmPeach', 'softBlue', 'lavender', 'forest', 'blackPurple'].includes(String(persistedState.companionTheme))
+            ? (persistedState.companionTheme as CompanionThemeName)
+            : 'warmPeach',
         };
       },
       partialize: (state) => ({
         activeProfileId: state.activeProfileId,
         activeStorylineId: state.activeStorylineId,
         chatMode: state.chatMode,
+        companionTheme: state.companionTheme,
         assistantMessageViewMode: state.assistantMessageViewMode,
         sidebarCollapsed: state.sidebarCollapsed,
         sidebarWidth: state.sidebarWidth,

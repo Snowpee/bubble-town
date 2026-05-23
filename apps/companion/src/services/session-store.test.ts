@@ -167,6 +167,50 @@ test('详情接口支持 sessionId 与旧别名读取同一会话', () => {
   }
 });
 
+test('详情接口读取 legacy Hermes transcript 时清洗 BubbleTownContextPack', () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    fs.writeFileSync(
+      path.join(hermesHome, 'sessions', 'session_legacy-contextpack.json'),
+      `${JSON.stringify(
+        {
+          session_id: 'legacy-contextpack',
+          platform: 'api-server',
+          session_start: '2026-05-16T10:00:00.000Z',
+          last_updated: '2026-05-16T10:05:00.000Z',
+          messages: [
+            {
+              id: 'm1',
+              role: 'user',
+              content: '<BubbleTownContextPack>\\nactivityLogs:\\n- 旧上下文\\n</BubbleTownContextPack>\\n\\n<UserMessage>真实用户消息</UserMessage>',
+              created_at: '2026-05-16T10:00:00.000Z',
+            },
+            {
+              id: 'm2',
+              role: 'assistant',
+              content: '角色回复',
+              created_at: '2026-05-16T10:05:00.000Z',
+            },
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      'utf8',
+    );
+
+    const detail = getSessionDetail('legacy-contextpack');
+
+    assert.deepEqual(
+      detail?.messages.map((message) => message.content),
+      ['真实用户消息', '角色回复'],
+    );
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
 test('未指定 profile 时只读取 default 会话，不跨 profile 匹配', () => {
   const hermesHome = createHermesHome();
 

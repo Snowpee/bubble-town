@@ -24,3 +24,10 @@ export interface UpdateProfileRequest {
 export interface SwitchProfileRequest {
   profileId: string;
 }
+
+export interface PrepareProfileForStorylineResponse {
+  profileId: string;
+  configPath: string;
+  soulPath: string;
+  changes: string[];
+}

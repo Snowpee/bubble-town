@@ -1,4 +1,11 @@
-import { DEFAULT_PROFILE_ID, type CreateProfileRequest, type ProfileSummary, type ProfilesResponse, type UpdateProfileRequest } from '@bubble-town/shared';
+import {
+  DEFAULT_PROFILE_ID,
+  type CreateProfileRequest,
+  type PrepareProfileForStorylineResponse,
+  type ProfileSummary,
+  type ProfilesResponse,
+  type UpdateProfileRequest,
+} from '@bubble-town/shared';
 import type { SessionSummary } from '@bubble-town/shared';
 import { apiDelete, apiGet, apiPatch, apiPost } from './client';
 
@@ -22,4 +29,8 @@ export function renameProfile(profileId: string, input: UpdateProfileRequest) {
 
 export function deleteProfile(profileId: string) {
   return apiDelete<{ success: boolean }>(`/api/profiles/${profileId}`);
+}
+
+export function prepareProfileForStoryline(profileId: string) {
+  return apiPost<PrepareProfileForStorylineResponse>(`/api/profiles/${profileId || DEFAULT_PROFILE_ID}/prepare-storyline`, {});
 }
