@@ -1,7 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import type { CreateProfileRequest, PrepareProfileForStorylineResponse, ProfileSummary, UpdateProfileRequest } from '@bubble-town/shared';
+import type {
+  CreateProfileRequest,
+  PrepareProfileForStorylineResponse,
+  ProfileSummary,
+  ResetProfileForStorylineResponse,
+  ResetProfileRuntimeSummary,
+  UpdateProfileRequest,
+} from '@bubble-town/shared';
 import { runHermesProfileCommand } from './profile-cli.js';
 import { DEFAULT_PROFILE_ID, getActiveProfilePath, getConfigPath, getProfileHome, getProfilesRoot, getSessionsDir } from './hermes-paths.js';
 
@@ -217,5 +224,85 @@ export function prepareProfileForStoryline(profileId: string): PrepareProfileFor
     configPath,
     soulPath,
     changes,
+  };
+}
+
+function ensureSessionResetNone(configPath: string, changes: string[]): void {
+  const rawConfig = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : '';
+  const configDoc = rawConfig.trim() ? YAML.parseDocument(rawConfig) : new YAML.Document({});
+  if (configDoc.errors.length > 0) {
+    throw new Error(`config.yaml 解析失败：${configPath}：${configDoc.errors[0]?.message ?? '未知 YAML 错误'}`);
+  }
+
+  if (configDoc.getIn(['session_reset', 'mode']) !== 'none') {
+    configDoc.setIn(['session_reset', 'mode'], 'none');
+  }
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, String(configDoc), 'utf8');
+  changes.push('重写 config.yaml，确保 session_reset.mode = none。');
+}
+
+function removePathIfExists(targetPath: string, description: string, changes: string[]): void {
+  if (!fs.existsSync(targetPath)) {
+    return;
+  }
+  fs.rmSync(targetPath, { recursive: true, force: true });
+  changes.push(description);
+}
+
+function removeFileIfExists(targetPath: string, description: string, changes: string[]): void {
+  if (!fs.existsSync(targetPath)) {
+    return;
+  }
+  fs.rmSync(targetPath, { force: true });
+  changes.push(description);
+}
+
+export function resetProfileForStoryline(
+  profileId: string,
+  runtimeReset: ResetProfileRuntimeSummary,
+  confirmationProfileName?: string,
+): ResetProfileForStorylineResponse {
+  const requestedId = profileId?.trim() || DEFAULT_PROFILE_ID;
+  const id = resolveExistingProfileId(requestedId);
+  if (!id) {
+    throw new Error(`Hermes profile 不存在：${requestedId}`);
+  }
+  if (confirmationProfileName?.trim() !== id) {
+    throw new Error(`确认输入不匹配，必须输入 profile 名称「${id}」才能执行重置。`);
+  }
+
+  const profileHome = getProfileHome(id);
+  if (!fs.existsSync(profileHome)) {
+    throw new Error(`Hermes profile 不存在：${id}`);
+  }
+
+  const changes: string[] = [];
+  const sessionsDir = getSessionsDir(id);
+  removePathIfExists(sessionsDir, '清空 Hermes sessions 目录。', changes);
+  removePathIfExists(path.join(profileHome, 'logs'), '清空 Hermes logs 目录。', changes);
+  removeFileIfExists(path.join(profileHome, 'state.db'), '删除 Hermes state.db。', changes);
+  removeFileIfExists(path.join(profileHome, 'state.db-shm'), '删除 Hermes state.db-shm。', changes);
+  removeFileIfExists(path.join(profileHome, 'state.db-wal'), '删除 Hermes state.db-wal。', changes);
+  removeFileIfExists(path.join(profileHome, 'response_store.db'), '删除 Hermes response_store.db。', changes);
+  removeFileIfExists(path.join(profileHome, 'response_store.db-shm'), '删除 Hermes response_store.db-shm。', changes);
+  removeFileIfExists(path.join(profileHome, 'response_store.db-wal'), '删除 Hermes response_store.db-wal。', changes);
+
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  changes.push('重建空的 sessions 目录。');
+
+  const configPath = getConfigPath(id);
+  ensureSessionResetNone(configPath, changes);
+
+  const soulPath = path.join(profileHome, 'SOUL.md');
+  fs.writeFileSync(soulPath, buildDefaultSoul(id), 'utf8');
+  changes.push('重写 SOUL.md 为 Bubble Town 要求的初始助手设定。');
+
+  return {
+    profileId: id,
+    configPath,
+    soulPath,
+    changes,
+    runtimeReset,
   };
 }

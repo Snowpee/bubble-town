@@ -4,6 +4,7 @@ import {
   handleDeleteProfile,
   getProfilesResponse,
   handlePrepareProfileForStoryline,
+  handleResetProfileForStoryline,
   handleRenameProfile,
   handleSwitchProfile,
 } from '../services/profile-service.js';
@@ -91,6 +92,17 @@ export async function registerProfileRoutes(app: FastifyInstance) {
     } catch (error) {
       reply.code(400);
       return { message: error instanceof Error ? error.message : '初始化 profile 剧情配置失败。' };
+    }
+  });
+
+  app.post('/api/profiles/:id/reset-storyline', async (request, reply) => {
+    const params = request.params as { id: string };
+    const body = request.body as { confirmationProfileName?: string } | undefined;
+    try {
+      return await handleResetProfileForStoryline(params.id, body?.confirmationProfileName ?? '');
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : '重置 profile 剧情环境失败。' };
     }
   });
 }
