@@ -10,12 +10,12 @@ import { registerStorylineRoutes } from './routes/storylines.js';
 import {
   ensureManagedHermesGateway,
   stopManagedHermesGateway,
-} from './services/hermes-gateway.js';
-import { getActiveProfileId } from './services/profile-store.js';
+} from './adapters/hermes/hermes-gateway.js';
+import { getActiveProfileId } from './store/profile-store.js';
 import {
   acquireCompanionLock,
   releaseCompanionLock,
-} from './services/companion-lock.js';
+} from './runtime/companion-lock.js';
 
 const fallbackPort = 3030;
 const fallbackHost = '127.0.0.1';

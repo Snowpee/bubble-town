@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { deleteSession, findSessionProfiles, getSessionDetail, getSessionSummary, listSessions } from '../services/session-store.js';
+import { deleteSession, findSessionProfiles, getSessionDetail, getSessionSummary, listSessions } from '../services/session-service.js';
 
 export async function registerSessionRoutes(app: FastifyInstance) {
   app.get('/api/sessions', async (request) => {

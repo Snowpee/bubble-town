@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { sendChat, streamChat } from './hermes-api.js';
-import { resetManagedHermesGatewayStateForTests, setManagedHermesGatewayProfileForTests } from './hermes-gateway.js';
+import { sendChat, streamChat } from '../adapters/hermes/hermes-api.js';
+import { resetManagedHermesGatewayStateForTests, setManagedHermesGatewayProfileForTests } from '../adapters/hermes/hermes-gateway.js';
 
 function createHermesHome() {
   const hermesHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bubble-town-hermes-api-'));
@@ -20,6 +20,15 @@ function writeProfileConfig(
   config: {
     modelDefault?: string;
     systemPrompt?: string;
+    auxiliaryLlm?: {
+      enabled?: boolean;
+      provider?: string;
+      baseUrl?: string;
+      model?: string;
+      defaultTimeoutMs?: number;
+      useFor?: string[];
+      apiKeyRef?: string;
+    };
   },
 ) {
   const profileHome = getProfileHome(hermesHome, profileId);
@@ -29,6 +38,19 @@ function writeProfileConfig(
     `  default: ${JSON.stringify(config.modelDefault ?? 'hermes-agent')}`,
     'agent:',
     `  system_prompt: ${JSON.stringify(config.systemPrompt ?? '')}`,
+    ...(config.auxiliaryLlm
+      ? [
+          'bubble_town:',
+          '  auxiliary_llm:',
+          `    enabled: ${config.auxiliaryLlm.enabled ? 'true' : 'false'}`,
+          `    provider: ${JSON.stringify(config.auxiliaryLlm.provider ?? 'openai-compatible')}`,
+          `    base_url: ${JSON.stringify(config.auxiliaryLlm.baseUrl ?? '')}`,
+          `    model: ${JSON.stringify(config.auxiliaryLlm.model ?? '')}`,
+          `    default_timeout_ms: ${String(config.auxiliaryLlm.defaultTimeoutMs ?? 15000)}`,
+          `    use_for: [${(config.auxiliaryLlm.useFor ?? []).map((entry) => JSON.stringify(entry)).join(', ')}]`,
+          ...(config.auxiliaryLlm.apiKeyRef ? [`    api_key_ref: ${JSON.stringify(config.auxiliaryLlm.apiKeyRef)}`] : []),
+        ]
+      : []),
   ];
   fs.writeFileSync(path.join(profileHome, 'config.yaml'), `${lines.join('\n')}\n`, 'utf8');
 }
@@ -983,6 +1005,76 @@ test('sendChat 会读取 profile config 的模型和 system prompt 注入 Respon
       instructions: '你现在必须扮演 Sami，并遵守 profile 的设定。',
     });
     assert.equal(readTranscriptFile(hermesHome, 'native-profile-config-1', 'sami').system_prompt, '你现在必须扮演 Sami，并遵守 profile 的设定。');
+  } finally {
+    globalThis.fetch = originalFetch;
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('sendChat 不会误用 auxiliary LLM 配置接管主聊天', async () => {
+  const hermesHome = createHermesHome();
+  const originalFetch = globalThis.fetch;
+  const fetchCalls: Array<{ url: string; payload: Record<string, unknown>; headers: HeadersInit | undefined }> = [];
+  ensureProfileSessionsDir(hermesHome, 'sami');
+  writeProfileConfig(hermesHome, 'sami', {
+    modelDefault: 'deepseek-v4-flash',
+    systemPrompt: '你现在必须扮演 Sami，并遵守 profile 的设定。',
+    auxiliaryLlm: {
+      enabled: true,
+      provider: 'openai-compatible',
+      baseUrl: 'https://api.example.com/v1',
+      model: 'gpt-4.1-mini',
+      defaultTimeoutMs: 12000,
+      useFor: ['world-state'],
+      apiKeyRef: 'bubble-town:auxiliary-llm',
+    },
+  });
+
+  globalThis.fetch = async (input, init) => {
+    const payload = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+    fetchCalls.push({
+      url: String(input),
+      payload,
+      headers: init?.headers,
+    });
+
+    return new Response(
+      JSON.stringify({
+        id: 'resp_profile_cfg_aux_1',
+        model: 'deepseek-v4-flash',
+        output: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [
+              {
+                type: 'output_text',
+                text: '主聊天仍由 Hermes profile 驱动。',
+              },
+            ],
+          },
+        ],
+      }),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Hermes-Session-Id': 'native-profile-config-aux-1',
+        },
+      },
+    );
+  };
+
+  try {
+    const response = await sendChat({
+      input: 'sami~',
+      profileId: 'sami',
+    });
+
+    assert.equal(response.sessionId, 'native-profile-config-aux-1');
+    assert.equal(fetchCalls[0]?.url, 'http://127.0.0.1:8642/v1/responses');
+    assert.equal(fetchCalls[0]?.payload.model, 'deepseek-v4-flash');
+    assert.notEqual(fetchCalls[0]?.payload.model, 'gpt-4.1-mini');
   } finally {
     globalThis.fetch = originalFetch;
     cleanupHermesHome(hermesHome);

@@ -83,12 +83,28 @@ export interface WorldStateDebugApplyResult {
 export type WorldStateProcessingStatus = 'scheduled' | 'completed';
 export type WorldStateProcessingPath = 'skip' | 'direct_apply' | 'uncertain_fallback_extractor';
 export type WorldStateSideChannelDecision = 'skip' | 'direct_apply' | 'uncertain';
+export type WorldStateExecutionMode = 'legacy_inline' | 'auxiliary_async';
+export type WorldStateDebugPhase =
+  | 'scheduled'
+  | 'gate_started'
+  | 'gate_completed'
+  | 'extractor_started'
+  | 'extractor_completed'
+  | 'apply_completed'
+  | 'completed'
+  | 'failed';
 
 export interface WorldStateSideChannelTrace {
   decision: WorldStateSideChannelDecision;
   reason?: string;
   confidence: number;
   candidates: WorldStateUpdateCandidate[];
+}
+
+export interface WorldStateDebugEvent {
+  phase: WorldStateDebugPhase;
+  at: string;
+  detail?: string;
 }
 
 export interface WorldStateDebugTrace {
@@ -99,6 +115,13 @@ export interface WorldStateDebugTrace {
   sourceMessageIds?: string[];
   processingStatus: WorldStateProcessingStatus;
   processingPath?: WorldStateProcessingPath;
+  executionMode?: WorldStateExecutionMode;
+  auxiliaryLlm?: {
+    enabledForTurn: boolean;
+    gateViaInvoker: boolean;
+    extractorViaInvoker: boolean;
+    taskType: 'world-state';
+  };
   rejectDecision?: {
     rejected: boolean;
     reason?: string;
@@ -119,6 +142,8 @@ export interface WorldStateDebugTrace {
   updated: boolean;
   skippedReason?: string;
   error?: string;
+  events?: WorldStateDebugEvent[];
+  lastUpdatedAt?: string;
   sceneProjectionBefore?: SceneProjection;
   sceneProjectionAfter?: SceneProjection;
 }

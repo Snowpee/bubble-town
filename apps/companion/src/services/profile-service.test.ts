@@ -11,8 +11,8 @@ import {
   resetManagedHermesGatewayStateForTests,
   setHermesGatewayHealthCheckerForTests,
   setHermesGatewaySpawnerForTests,
-} from './hermes-gateway.js';
-import { ensureMemoryEmbedding, removeEmbeddingsForStorylines, resetMemoryEmbeddingsForTests } from './memory-embeddings.js';
+} from '../adapters/hermes/hermes-gateway.js';
+import { ensureMemoryEmbedding, removeEmbeddingsForStorylines, resetMemoryEmbeddingsForTests } from '../features/memory/memory-embeddings.js';
 import { handlePrepareProfileForStoryline, handleResetProfileForStoryline, handleSwitchProfile, getProfilesResponse } from './profile-service.js';
 import {
   createActivityLog,
@@ -28,7 +28,7 @@ import {
   resetProfileRuntimeState,
   resetStoryRuntimeForTests,
   upsertRuntimeSession,
-} from './story-runtime-store.js';
+} from '../store/story-runtime-store.js';
 
 function cleanupTestState(hermesHome: string) {
   resetHermesProfileCommandRunnerForTests();

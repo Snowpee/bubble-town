@@ -16,7 +16,7 @@ import {
   setHermesGatewayHealthCheckerForTests,
   setHermesGatewaySpawnerForTests,
   stopManagedHermesGateway,
-} from './hermes-gateway.js';
+} from '../adapters/hermes/hermes-gateway.js';
 
 type HermesGatewayChildProcess = ChildProcessByStdio<null, PassThrough, PassThrough>;
 

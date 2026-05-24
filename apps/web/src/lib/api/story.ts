@@ -39,41 +39,174 @@ import type {
   ChatStreamToolProgressEvent,
 } from '@bubble-town/shared';
 
+type WorldStateLogSource = 'send' | 'stream' | 'preview';
+
+function getWorldStateTraceChannel(trace: WorldStateDebugTrace): 'auxiliary' | 'legacy' {
+  return trace.executionMode === 'auxiliary_async' || trace.auxiliaryLlm?.enabledForTurn ? 'auxiliary' : 'legacy';
+}
+
+function buildWorldStateLogPrefix(
+  trace: WorldStateDebugTrace,
+  context: {
+    source: WorldStateLogSource;
+    storylineId: string;
+  },
+  segment?: string,
+) {
+  const base = `[BubbleTown][WorldState][${getWorldStateTraceChannel(trace)}][${context.source}]`;
+  return segment ? `${base}[${segment}]` : `${base} storyline=${context.storylineId}`;
+}
+
+function logWorldStateNode(
+  trace: WorldStateDebugTrace,
+  context: {
+    source: WorldStateLogSource;
+    storylineId: string;
+  },
+  node: string,
+  payload: {
+    input?: unknown;
+    output?: unknown;
+    status?: unknown;
+    skippedReason?: string | null;
+    error?: string | null;
+  },
+) {
+  if (
+    payload.input === undefined
+    && payload.output === undefined
+    && payload.status === undefined
+    && payload.skippedReason === undefined
+    && payload.error === undefined
+  ) {
+    return;
+  }
+
+  console.groupCollapsed(buildWorldStateLogPrefix(trace, context, node));
+  console.debug('input', payload.input ?? null);
+  console.debug('output', payload.output ?? null);
+  if (payload.status !== undefined) {
+    console.debug('status', payload.status);
+  }
+  if (payload.skippedReason !== undefined) {
+    console.debug('skippedReason', payload.skippedReason ?? null);
+  }
+  if (payload.error !== undefined) {
+    console.debug('error', payload.error ?? null);
+  }
+  console.groupEnd();
+}
+
 function logWorldStateDebugTrace(trace: WorldStateDebugTrace | undefined, context: {
-  source: 'send' | 'stream';
+  source: WorldStateLogSource;
   storylineId: string;
   responseId?: string;
+  previewInput?: string;
+  sceneProjection?: ContextPreviewResponse['contextPack']['sceneProjection'];
+  recentMessages?: ContextPreviewResponse['contextPack']['recentMessages'];
 }) {
   if (!trace) {
     return;
   }
 
-  console.groupCollapsed(`[BubbleTown][WorldState][${context.source}] storyline=${context.storylineId}`);
+  console.groupCollapsed(buildWorldStateLogPrefix(trace, context));
+  console.debug('storylineId', context.storylineId);
+  console.debug('responseId', context.responseId ?? null);
   console.debug('processingStatus', trace.processingStatus);
   console.debug('processingPath', trace.processingPath ?? null);
-  console.debug('rejectDecision', trace.rejectDecision ?? null);
-  console.debug('gatingRequest', trace.gatingRequest ?? null);
-  console.debug('gatingResponse', trace.gatingResponse ?? null);
-  console.debug('llmRequest', trace.llmRequest ?? null);
-  console.debug('llmResponse', trace.llmResponse ?? null);
-  console.debug('updated', trace.updated);
-  console.debug('applyResults', trace.applyResults);
-  console.debug('sceneProjectionBefore', trace.sceneProjectionBefore ?? null);
-  console.debug('sceneProjectionAfter', trace.sceneProjectionAfter ?? null);
-  console.debug('skippedReason', trace.skippedReason ?? null);
-  console.debug('error', trace.error ?? null);
-  console.debug('responseId', context.responseId ?? null);
+  console.debug('executionMode', trace.executionMode ?? null);
+  console.debug('channel', getWorldStateTraceChannel(trace));
+  console.debug('lastUpdatedAt', trace.lastUpdatedAt ?? null);
+  console.debug('latestEvent', trace.events?.at(-1) ?? null);
+  console.debug('previewInput', context.previewInput ?? null);
+  console.debug('sceneProjection', context.sceneProjection ?? null);
+  console.debug('recentMessages', context.recentMessages ?? null);
+
+  logWorldStateNode(trace, context, 'turn', {
+    input: {
+      userInput: trace.userInput,
+      assistantOutput: trace.assistantOutput,
+      sourceMessageIds: trace.sourceMessageIds ?? [],
+    },
+    output: {
+      updated: trace.updated,
+      processingStatus: trace.processingStatus,
+      processingPath: trace.processingPath ?? null,
+      executionMode: trace.executionMode ?? null,
+      auxiliaryLlm: trace.auxiliaryLlm ?? null,
+    },
+    skippedReason: trace.skippedReason ?? null,
+    error: trace.error ?? null,
+  });
+
+  logWorldStateNode(trace, context, 'reject-policy', {
+    input: {
+      userInput: trace.userInput,
+      assistantOutput: trace.assistantOutput,
+    },
+    output: trace.rejectDecision ?? { rejected: false },
+    skippedReason: trace.rejectDecision?.reason ?? trace.skippedReason ?? null,
+  });
+
+  logWorldStateNode(trace, context, 'gate', {
+    input: trace.gatingRequest,
+    output: trace.gatingResponse,
+    status: trace.events?.filter((event) => event.phase === 'gate_started' || event.phase === 'gate_completed') ?? [],
+    skippedReason: trace.gatingResponse?.reason ?? null,
+    error: trace.error?.includes('gating') ? trace.error : null,
+  });
+
+  logWorldStateNode(trace, context, 'extractor', {
+    input: trace.llmRequest,
+    output: trace.llmResponse,
+    status: trace.events?.filter((event) => event.phase === 'extractor_started' || event.phase === 'extractor_completed') ?? [],
+    skippedReason: trace.llmResponse?.candidates?.length === 0 ? trace.skippedReason ?? null : null,
+  });
+
+  logWorldStateNode(trace, context, 'apply', {
+    input: {
+      candidates: trace.processingPath === 'direct_apply'
+        ? trace.gatingResponse?.candidates ?? []
+        : trace.llmResponse?.candidates ?? [],
+      sceneProjectionBefore: trace.sceneProjectionBefore ?? null,
+    },
+    output: {
+      applyResults: trace.applyResults,
+      updated: trace.updated,
+      sceneProjectionAfter: trace.sceneProjectionAfter ?? null,
+    },
+    status: trace.events?.filter((event) => event.phase === 'apply_completed' || event.phase === 'completed') ?? [],
+    error: trace.applyResults.some((result) => result.outcome === 'error') ? '存在 apply error，详见 applyResults。' : null,
+  });
+
+  logWorldStateNode(trace, context, 'timeline', {
+    output: trace.events ?? [],
+    status: {
+      latestEvent: trace.events?.at(-1) ?? null,
+      processingStatus: trace.processingStatus,
+    },
+  });
+
   console.groupEnd();
 }
 
 function logContextPreviewWorldState(response: ContextPreviewResponse, storylineId: string, input?: string) {
+  if (response.worldStateDebug) {
+    logWorldStateDebugTrace(response.worldStateDebug, {
+      source: 'preview',
+      storylineId,
+      previewInput: input,
+      sceneProjection: response.contextPack.sceneProjection,
+      recentMessages: response.contextPack.recentMessages,
+    });
+    return;
+  }
+
   console.groupCollapsed(`[BubbleTown][WorldState][preview] storyline=${storylineId}`);
   console.debug('input', input ?? null);
   console.debug('sceneProjection', response.contextPack.sceneProjection ?? null);
   console.debug('recentMessages', response.contextPack.recentMessages);
-  if (response.worldStateDebug) {
-    console.debug('latestWorldStateDebug', response.worldStateDebug);
-  }
+  console.debug('latestWorldStateDebug', null);
   console.groupEnd();
 }
 

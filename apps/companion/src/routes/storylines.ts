@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import type {
   ChatStreamDeltaEvent,
   ChatStreamErrorEvent,
@@ -6,12 +6,11 @@ import type {
   StorylineChatStreamCompleteEvent,
   StorylineChatStreamStartEvent,
 } from '@bubble-town/shared';
-import { previewContextPack, previewContextPackForInput, sendStorylineChat, streamStorylineChat } from '../services/story-chat-service.js';
-import { searchRelativeTime } from '../services/relative-time-search.js';
-import { buildTimeContext } from '../services/context-pack.js';
-import { validateProfileContinuity } from '../services/profile-continuity.js';
-import { consolidateStorylineMemory, correctMemory } from '../services/memory-governance.js';
+import { streamSseResponse } from '../lib/sse.js';
+import { previewContextPack, previewContextPackForInput, sendStorylineChat, streamStorylineChat } from '../features/story/story-chat-service.js';
 import {
+  consolidateStorylineMemory,
+  correctMemory,
   createActivityLog,
   createMemoryRecord,
   createSuppressedMemory,
@@ -20,33 +19,18 @@ import {
   getActiveStoryline,
   getActiveStorylineId,
   getStoryline,
-  listAllActivityLogs,
-  listAllMemoryRecords,
-  listAllSuppressedMemories,
+  listStorylineActivityLogs,
+  listStorylineMemories,
+  listStorylineSuppressedMemories,
+  searchStorylineRelativeTime,
   listStorylines,
   setActiveStoryline,
   setActiveStorylineForProfile,
   updateActivityLog,
   updateMemoryRecord,
   updateStoryline,
-} from '../services/story-runtime-store.js';
-
-function writeSseEvent(reply: FastifyReply, event: string, payload: unknown) {
-  if (reply.raw.writableEnded || reply.raw.destroyed) {
-    return;
-  }
-
-  reply.raw.write(`event: ${event}\n`);
-  reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
-}
-
-function isAbortError(error: unknown): boolean {
-  if (error instanceof DOMException) {
-    return error.name === 'AbortError';
-  }
-
-  return error instanceof Error && error.name === 'AbortError';
-}
+  validateStorylineProfileContinuity,
+} from '../services/storyline-service.js';
 
 export async function registerStorylineRoutes(app: FastifyInstance) {
   app.get('/api/storylines', async () => ({
@@ -148,17 +132,17 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
   app.post('/api/storylines/:id/relative-time-search', async (request, reply) => {
     const params = request.params as { id: string };
     const body = request.body as { input?: string };
-    const storyline = getStoryline(params.id);
-    if (!storyline) {
-      reply.code(404);
-      return { message: '未找到目标剧情。' };
-    }
-    const input = body.input?.trim();
-    if (!input) {
+    try {
+      const result = searchStorylineRelativeTime(params.id, body.input);
+      if (!result) {
+        reply.code(404);
+        return { message: '未找到目标剧情。' };
+      }
+      return result;
+    } catch (error) {
       reply.code(400);
-      return { message: '检索输入不能为空。' };
+      return { message: error instanceof Error ? error.message : '相对时间检索失败。' };
     }
-    return { results: searchRelativeTime(storyline.id, input, buildTimeContext(storyline.lastInteractionAt)) };
   });
 
   app.post('/api/storylines/:id/memory/consolidate', async (request, reply) => {
@@ -177,12 +161,12 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
 
   app.post('/api/storylines/:id/profile/validate-continuity', async (request, reply) => {
     const params = request.params as { id: string };
-    const storyline = getStoryline(params.id);
-    if (!storyline) {
+    const result = validateStorylineProfileContinuity(params.id);
+    if (!result) {
       reply.code(404);
       return { message: '未找到目标剧情。' };
     }
-    return validateProfileContinuity(storyline.hermesProfileId);
+    return result;
   });
 
   app.get('/api/storylines/:id/memories', async (request, reply) => {
@@ -191,7 +175,7 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
       reply.code(404);
       return { message: '未找到目标剧情。' };
     }
-    return { memories: listAllMemoryRecords(params.id) };
+    return { memories: listStorylineMemories(params.id) };
   });
 
   app.post('/api/storylines/:id/memories', async (request, reply) => {
@@ -270,7 +254,7 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
       reply.code(404);
       return { message: '未找到目标剧情。' };
     }
-    return { suppressedMemories: listAllSuppressedMemories(params.id) };
+    return { suppressedMemories: listStorylineSuppressedMemories(params.id) };
   });
 
   app.post('/api/storylines/:id/suppressed-memories', async (request, reply) => {
@@ -298,7 +282,7 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
       reply.code(404);
       return { message: '未找到目标剧情。' };
     }
-    return { activityLogs: listAllActivityLogs(params.id) };
+    return { activityLogs: listStorylineActivityLogs(params.id) };
   });
 
   app.post('/api/storylines/:id/activity', async (request, reply) => {
@@ -343,53 +327,20 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
 
   app.post('/api/storylines/:id/chat/respond-stream', async (request, reply) => {
     const params = request.params as { id: string };
-    const origin = typeof request.headers.origin === 'string' ? request.headers.origin : '*';
-    const abortController = new AbortController();
-    const handleAbort = () => {
-      if (!reply.raw.writableEnded && !abortController.signal.aborted) {
-        abortController.abort();
-      }
-    };
-
-    request.raw.on('aborted', handleAbort);
-    reply.raw.on('close', handleAbort);
-
-    reply.raw.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'X-Accel-Buffering': 'no',
-      'Access-Control-Allow-Origin': origin,
-      Vary: 'Origin',
-    });
-
-    try {
+    return streamSseResponse(request, reply, async ({ send, signal }) => {
       await streamStorylineChat({
         ...(request.body as { input: string; attachments?: []; mode?: 'responses' | 'chat-completions' }),
         storylineId: params.id,
       }, {
-        onStart: (event: StorylineChatStreamStartEvent) => writeSseEvent(reply, 'message-start', event),
-        onDelta: (delta: string) => writeSseEvent(reply, 'message-delta', { delta } satisfies ChatStreamDeltaEvent),
-        onToolProgress: (event: ChatStreamToolProgressEvent) => writeSseEvent(reply, 'tool-progress', event),
-        onComplete: (event: StorylineChatStreamCompleteEvent) => writeSseEvent(reply, 'message-complete', event),
+        onStart: (event: StorylineChatStreamStartEvent) => send('message-start', event),
+        onDelta: (delta: string) => send('message-delta', { delta } satisfies ChatStreamDeltaEvent),
+        onToolProgress: (event: ChatStreamToolProgressEvent) => send('tool-progress', event),
+        onComplete: (event: StorylineChatStreamCompleteEvent) => send('message-complete', event),
       }, {
-        signal: abortController.signal,
+        signal,
       });
-    } catch (error) {
-      if (isAbortError(error)) {
-        return;
-      }
-
-      writeSseEvent(reply, 'message-error', {
-        message: error instanceof Error ? error.message : '剧情流式聊天失败。',
-      } satisfies ChatStreamErrorEvent);
-    } finally {
-      request.raw.off('aborted', handleAbort);
-      reply.raw.off('close', handleAbort);
-
-      if (!reply.raw.writableEnded && !reply.raw.destroyed) {
-        reply.raw.end();
-      }
-    }
+    }, (error) => ({
+      message: error instanceof Error ? error.message : '剧情流式聊天失败。',
+    } satisfies ChatStreamErrorEvent));
   });
 }

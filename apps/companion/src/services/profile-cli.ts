@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { getHermesRoot } from './hermes-paths.js';
+import { getHermesRoot } from '../adapters/hermes/hermes-paths.js';
 
 let profileCommandRunner = (args: string[]) => {
   execFileSync('hermes', ['profile', ...args], {

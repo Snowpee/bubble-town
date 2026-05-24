@@ -8,7 +8,7 @@
     "dev:lan": "COMPANION_HOST=0.0.0.0 tsx watch src/standalone.ts",
     "check": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json && esbuild src/standalone.ts --bundle --platform=node --format=cjs --sourcemap --outfile=dist/server.cjs",
-    "test": "tsx --test src/**/*.test.ts"
+    "test": "tsx --test $(find src -name '*.test.ts')"
   },
   "dependencies": {
     "@bubble-town/shared": "file:../../packages/shared",

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { createCharacter, getCharacter, listCharacters, updateCharacter } from '../services/story-runtime-store.js';
+import { createCharacter, getCharacter, listCharacters, updateCharacter } from '../services/character-service.js';
 
 export async function registerCharacterRoutes(app: FastifyInstance) {
   app.get('/api/characters', async () => ({ characters: listCharacters() }));

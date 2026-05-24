@@ -14,7 +14,7 @@ import {
   setActiveStoryline,
   setActiveStorylineForProfile,
   upsertRuntimeSession,
-} from './story-runtime-store.js';
+} from '../store/story-runtime-store.js';
 
 function createHermesHome() {
   const hermesHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bubble-town-story-runtime-'));

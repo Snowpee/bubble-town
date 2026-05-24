@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { deleteSession, getSessionDetail, getSessionIdForResponse, getSessionSummary, listSessions } from './session-store.js';
+import { deleteSession, getSessionDetail, getSessionIdForResponse, getSessionSummary, listSessions } from '../store/session-store.js';
 
 function createHermesHome() {
   const hermesHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bubble-town-session-store-'));
