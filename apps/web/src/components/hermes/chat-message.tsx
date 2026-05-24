@@ -187,7 +187,7 @@ export function ChatMessage({ message, assistantMessageViewMode = 'bubble', show
       {isStreamingPlaceholder ? (
         <ActivityStatusLine />
       ) : hasMessageBody ? (
-        <div className="space-y-3">
+        <div className="space-y-3 message-attachments">
           <MessageAttachments message={message} />
           {message.content ? (
             shouldRenderMarkdown ? (

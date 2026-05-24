@@ -428,6 +428,7 @@
   }
 }
 
+
 @layer components {
   .companion-page {
     position: relative;
@@ -530,9 +531,6 @@
   .companion-glass {
     border: 1px solid var(--border);
     background: linear-gradient(180deg, color-mix(in srgb, var(--card), white 16%), color-mix(in srgb, var(--card), transparent 38%));
-    box-shadow:
-      0 26px 70px var(--companion-glass-shadow, color-mix(in srgb, var(--foreground), transparent 92%)),
-      inset 0 1px 0 rgba(255, 255, 255, 0.72);
     backdrop-filter: blur(26px) saturate(1.12);
     -webkit-backdrop-filter: blur(26px) saturate(1.12);
   }
@@ -604,6 +602,14 @@
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.48);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
+  }
+  .message-attachments em,
+  .message-attachments blockquote {
+    font-family: serif;
+    font-weight: 200;
+    /* opacity: 0.8; */
+    color: var(--muted-foreground);
+    font-style: normal !important;
   }
 }
 

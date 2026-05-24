@@ -8,7 +8,7 @@ interface StatusCardProps {
 
 export function StatusCard({ item }: StatusCardProps) {
   return (
-    <Card>
+    <Card className="rounded-[var(--settings-surface-radius,1.75rem)] border-border/70 bg-card/78 shadow-[0_20px_48px_-28px_var(--companion-glass-shadow)] backdrop-blur-xl">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle>{item.key}</CardTitle>

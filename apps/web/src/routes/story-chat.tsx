@@ -80,6 +80,7 @@ export function StoryChatRoute() {
     queryKey: ['context-preview', activeStoryline?.id],
     queryFn: () => previewContextPack(activeStoryline!.id),
     enabled: Boolean(activeStoryline?.id),
+    refetchInterval: (query) => query.state.data?.worldStateDebug?.processingStatus === 'scheduled' ? 1000 : false,
   });
   const isMacDesktop = window.bubbleTownDesktop?.platform === 'darwin';
 
