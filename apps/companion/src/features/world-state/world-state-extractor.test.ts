@@ -256,7 +256,7 @@ test('structured world state extractor 会把当前 sceneProjection 一并提供
     });
 
     assert.equal(candidates.length, 2);
-    assert.match(String(fetchCalls[0]?.payload.instructions), /找回、捡回、恢复完好、重新放回某处/);
+    assert.match(String(fetchCalls[0]?.payload.instructions), /省略主语或代词化的恢复表达/);
     assert.match(String(fetchCalls[0]?.payload.input), /sceneProjectionSummary:/);
     assert.match(String(fetchCalls[0]?.payload.input), /钥匙当前状态为 lost/);
     assert.match(String(fetchCalls[0]?.payload.input), /抽屉当前状态为 discarded/);

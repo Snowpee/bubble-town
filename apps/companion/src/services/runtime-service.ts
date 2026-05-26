@@ -2,6 +2,7 @@ import type {
   ActivityLog,
   Character,
   MemoryRecord,
+  PendingSemanticFrame,
   RuntimeSession,
   SceneProjection,
   Storyline,
@@ -15,6 +16,7 @@ import {
   selectActiveStorylineId,
   selectAllActivityLogs,
   selectAllMemoryRecords,
+  selectPendingSemanticFrames,
   selectAllSuppressedMemories,
   selectCharacterById,
   selectMemoryRecordById,
@@ -36,6 +38,7 @@ export interface StorylineRuntimeContext {
   suppressedMemories: SuppressedMemory[];
   activityLogs: ActivityLog[];
   allActivityLogs: ActivityLog[];
+  pendingSemanticFrames: PendingSemanticFrame[];
   sceneProjection?: SceneProjection;
 }
 
@@ -90,6 +93,7 @@ export function getStorylineRuntimeContextFromSnapshot(
       .filter((entry) => entry.status === 'active')
       .slice(0, 20),
     allActivityLogs: selectAllActivityLogs(snapshot, storyline.id),
+    pendingSemanticFrames: selectPendingSemanticFrames(snapshot, storyline.id),
     sceneProjection: buildSceneProjectionFromMemories(allMemoryRecords, getStorylineSceneId(storyline)),
   };
 }

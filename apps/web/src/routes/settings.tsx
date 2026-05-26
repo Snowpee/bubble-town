@@ -7,11 +7,13 @@ import {
   Database,
   EyeOff,
   History,
+  MoreHorizontal,
   RefreshCw,
   RotateCcw,
   Search,
   Settings,
   SlidersHorizontal,
+  Trash2,
   type LucideIcon,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -26,6 +28,7 @@ import {
   type MemoryKind,
   type MemoryRecord,
   type MemorySource,
+  type PendingSemanticFrame,
   type ProfilesResponse,
   type RuntimeRecordStatus,
 } from '@bubble-town/shared';
@@ -41,24 +44,41 @@ import { markActiveProfileInResponse } from '@/lib/api/profile-cache';
 import { fetchProfiles, prepareProfileForStoryline, resetProfileForStoryline, switchProfile } from '@/lib/api/profiles';
 import {
   activateStorylineForProfile,
+  batchUpdateMemories,
+  cancelPendingSemanticFrame,
   consolidateStorylineMemory,
+  confirmPendingSemanticFrame,
   correctMemory,
   createCharacter,
+  createSuppressedMemory,
   createStoryline,
+  deleteMemory,
+  deleteSuppressedMemory,
   fetchActiveStoryline,
   fetchActivityLogs,
+  fetchPendingSemanticFrames,
+  fetchRuntimeDiagnostics,
+  fetchSuppressedMemories,
   fetchStorylineMemories,
   fetchStorylines,
+  hideActivityLog,
   hideMemory,
+  permanentlyDeleteMemory,
   restoreMemory,
 } from '@/lib/api/story';
 import { logProfileDebug } from '@/lib/debug/profile-debug';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { companionThemeOptions, type CompanionThemeName } from '@/lib/companion-theme';
 import { StatusCard } from '@/components/hermes/status-card';
-import { SETTINGS_ALL_FILTER_VALUE, filterSettingsMemories } from './settings-memory';
+import { SETTINGS_ALL_FILTER_VALUE, filterSettingsMemories, getMemoryAuditRole, getMemoryRiskTags, type SettingsMemoryRisk } from './settings-memory';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import {
   Dialog,
   DialogContent,
@@ -76,21 +96,15 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  Sidebar,
-  SidebarContent,
-  SidebarFooter,
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarInset,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
   SidebarProvider,
-  SidebarRail,
   SidebarTrigger,
   useSidebar,
 } from '@/components/ui/sidebar';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
@@ -161,6 +175,40 @@ function formatPercent(value?: number) {
   return `${Math.round(value * 100)}%`;
 }
 
+function runtimeStatusLabel(status?: 'processing' | 'updated' | 'failed' | 'skipped' | 'uncertain') {
+  switch (status) {
+    case 'processing':
+      return '处理中';
+    case 'updated':
+      return '已更新';
+    case 'failed':
+      return '失败';
+    case 'uncertain':
+      return '待确认';
+    case 'skipped':
+    default:
+      return '未触发';
+  }
+}
+
+function runtimeStatusVariant(status?: 'processing' | 'updated' | 'failed' | 'skipped' | 'uncertain'): 'default' | 'secondary' | 'outline' {
+  switch (status) {
+    case 'updated':
+      return 'default';
+    case 'processing':
+    case 'uncertain':
+      return 'secondary';
+    case 'failed':
+    case 'skipped':
+    default:
+      return 'outline';
+  }
+}
+
+function runtimeStatusClassName(status?: 'processing' | 'updated' | 'failed' | 'skipped' | 'uncertain') {
+  return status === 'failed' ? 'border-destructive/40 text-destructive' : undefined;
+}
+
 function statusVariant(status: RuntimeRecordStatus) {
   if (status === 'active') {
     return 'default';
@@ -215,6 +263,52 @@ function findActivitiesByIds(activityLogs: ActivityLog[], ids?: string[]) {
 
   const idSet = new Set(ids);
   return activityLogs.filter((activityLog) => idSet.has(activityLog.id));
+}
+
+const MEMORY_RISK_LABELS: Record<SettingsMemoryRisk, string> = {
+  old_schema: '旧 schema',
+  no_source: '无来源',
+  low_confidence: '低置信',
+  time_mismatch: '时间错位',
+  transient_world_state: '结构化临时状态',
+};
+
+const ACTIVITY_LOG_FILTERS = ['all', 'active', 'hidden', 'consolidated', 'referenced', 'unreferenced'] as const;
+type ActivityLogFilter = typeof ACTIVITY_LOG_FILTERS[number];
+
+const ACTIVITY_LOG_FILTER_LABELS: Record<ActivityLogFilter, string> = {
+  all: '全部事件',
+  active: 'active',
+  hidden: 'hidden',
+  consolidated: '已巩固',
+  referenced: '被引用',
+  unreferenced: '未引用',
+};
+
+function activityReferencedByMemories(activityLogId: string, memories: MemoryRecord[]) {
+  return memories.filter((memory) => memory.sourceActivityIds?.includes(activityLogId));
+}
+
+function isActivityLogConsolidated(activityLog: ActivityLog) {
+  return activityLog.tags.includes('consolidated');
+}
+
+function formatMemoryPreview(memory?: MemoryRecord) {
+  return memory?.content ?? '未找到关联记忆';
+}
+
+function MemoryRiskBadges({ memory, activityLogs }: { memory: MemoryRecord; activityLogs: ActivityLog[] }) {
+  const risks = getMemoryRiskTags(memory, { activityLogs });
+  if (risks.length === 0) {
+    return null;
+  }
+  return (
+    <>
+      {risks.map((risk) => (
+        <Badge key={risk} variant="outline" className="border-destructive/40 text-destructive">{MEMORY_RISK_LABELS[risk]}</Badge>
+      ))}
+    </>
+  );
 }
 
 function MemoryMetaGrid({ memory }: { memory: MemoryRecord }) {
@@ -360,14 +454,94 @@ function MemoryDetail({ memory, activityLogs, allMemories, onCorrect, onHide, on
   );
 }
 
+interface ActivityLogDetailProps {
+  activityLog: ActivityLog;
+  memories: MemoryRecord[];
+  onOpenMemory: (memoryId: string) => void;
+  onHide: (activityLog: ActivityLog) => void;
+  actionPending: boolean;
+}
+
+function ActivityLogDetail({ activityLog, memories, onOpenMemory, onHide, actionPending }: ActivityLogDetailProps) {
+  const referencedBy = activityReferencedByMemories(activityLog.id, memories);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 space-y-2">
+          <div className="flex flex-wrap gap-2">
+            <Badge variant={statusVariant(activityLog.status)}>{activityLog.status}</Badge>
+            {isActivityLogConsolidated(activityLog) ? <Badge variant="secondary">已巩固</Badge> : <Badge variant="outline">未巩固</Badge>}
+            {referencedBy.length > 0 ? <Badge variant="secondary">被 {referencedBy.length} 条记忆引用</Badge> : <Badge variant="outline">未被记忆引用</Badge>}
+          </div>
+          <p className="max-w-3xl text-sm leading-7 text-foreground">{activityLog.summary}</p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => onHide(activityLog)}
+          disabled={activityLog.status !== 'active' || actionPending}
+        >
+          <EyeOff className="mr-2 h-4 w-4" />
+          隐藏事件
+        </Button>
+      </div>
+
+      <dl className="grid gap-2 text-xs sm:grid-cols-2">
+        {[
+          ['事件时间', formatDateTime(activityLog.happenedAt)],
+          ['时区', activityLog.timezone],
+          ['状态', activityLog.status],
+          ['Embedding', activityLog.embeddingRef ?? '无'],
+        ].map(([label, value]) => (
+          <div key={label} className={cn(SETTINGS_INNER_RADIUS, 'border border-border/60 bg-background/35 px-3 py-2')}>
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="mt-1 truncate font-medium text-foreground">{value}</dd>
+          </div>
+        ))}
+      </dl>
+
+      <div className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-background/35 p-3')}>
+        <div className="mb-2 text-xs font-medium text-muted-foreground">标签</div>
+        <div className="flex flex-wrap gap-1.5">
+          {activityLog.tags.length > 0 ? activityLog.tags.map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>) : <span className="text-xs text-muted-foreground">无标签</span>}
+        </div>
+      </div>
+
+      <div className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-background/35 p-3')}>
+        <div className="mb-2 text-xs font-medium text-muted-foreground">引用这条事件的记忆</div>
+        <div className="space-y-2">
+          {referencedBy.length > 0 ? referencedBy.map((memory) => (
+            <button
+              key={memory.id}
+              type="button"
+              className={cn(SETTINGS_INNER_RADIUS, 'block w-full border border-border/70 bg-card/55 px-3 py-2 text-left text-xs leading-5 transition hover:border-primary/60 hover:bg-primary/5')}
+              onClick={() => onOpenMemory(memory.id)}
+            >
+              <div className="flex flex-wrap gap-1.5">
+                <Badge variant={statusVariant(memory.status)}>{memory.status}</Badge>
+                <Badge variant="outline">{memory.kind ?? 'unclassified'}</Badge>
+                <Badge variant="secondary">{memory.source}</Badge>
+              </div>
+              <div className="mt-2 line-clamp-2 text-foreground">{memory.content}</div>
+            </button>
+          )) : <div className="text-xs text-muted-foreground">暂无记忆引用这条 ActivityLog。</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsCard({
+  id,
   title,
   description,
   className,
   children,
-}: React.PropsWithChildren<{ title: string; description?: string; className?: string }>) {
+}: React.PropsWithChildren<{ id?: string; title: string; description?: string; className?: string }>) {
   return (
-    <section className={cn('companion-glass p-4 md:p-5', SETTINGS_SURFACE_RADIUS, className)}>
+    <section id={id} className={cn('companion-glass scroll-mt-4 p-4 md:p-5', SETTINGS_SURFACE_RADIUS, className)}>
       <div className="mb-4">
         <div className="text-sm font-medium">{title}</div>
         {description ? (
@@ -390,7 +564,8 @@ function SettingsSidebarNav({
   onSectionChange,
   selectedStorylineTitle,
 }: SettingsSidebarNavProps) {
-  const { isMobile, setOpenMobile } = useSidebar();
+  const { state, isMobile, setOpenMobile } = useSidebar();
+  const collapsed = state === 'collapsed' && !isMobile;
 
   const handleSectionSelect = (section: SettingsSectionId) => {
     onSectionChange(section);
@@ -400,44 +575,71 @@ function SettingsSidebarNav({
   };
 
   return (
-    <>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {SETTINGS_SECTIONS.map((section) => {
-                const Icon = section.icon;
-                return (
-                  <SidebarMenuItem key={section.id}>
-                    <SidebarMenuButton
-                      type="button"
-                      size="lg"
-                      tooltip={section.label}
-                      isActive={activeSection === section.id}
-                      onClick={() => handleSectionSelect(section.id)}
-                    >
-                      <Icon className="h-4 w-4 shrink-0" />
-                      <div className="min-w-0 group-data-[collapsible=icon]:hidden">
-                        <div className="font-medium">{section.label}</div>
-                      </div>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                );
-              })}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
+    <aside
+      data-state={state}
+      className={cn(
+        'companion-glass relative z-30 hidden h-full shrink-0 flex-col rounded-[var(--settings-surface-radius)] text-foreground shadow-[0_24px_64px_-36px_var(--companion-glass-shadow)] transition-[width] duration-200 ease-linear md:flex',
+        collapsed ? 'w-16' : 'w-[var(--sidebar-width)]',
+      )}
+    >
+      <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
 
-      <SidebarFooter>
-        <div className={cn(SETTINGS_INNER_RADIUS, 'border border-sidebar-border/70 bg-white/8 px-3 py-3 text-xs leading-5 text-sidebar-foreground/70 group-data-[collapsible=icon]:hidden')}>
-          <div className="font-medium text-sidebar-foreground">当前 Timeline</div>
+        <nav className="flex flex-col gap-2">
+          {SETTINGS_SECTIONS.map((section) => {
+            const Icon = section.icon;
+            const active = activeSection === section.id;
+            const button = (
+              <button
+                key={section.id}
+                type="button"
+                aria-label={section.label}
+                aria-current={active ? 'page' : undefined}
+                className={cn(
+                  'flex h-12 w-full items-center overflow-hidden rounded-[var(--settings-inner-radius)] px-0 text-left text-sm font-medium transition-[background-color,color] duration-200 ease-linear focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  active
+                    ? 'bg-sidebar-accent text-primary'
+                    : 'text-foreground hover:bg-background/45 hover:text-primary',
+                )}
+                onClick={() => handleSectionSelect(section.id)}
+              >
+                <span className="grid h-10 w-10 shrink-0 place-items-center">
+                  <Icon className="h-5 w-5" />
+                </span>
+                <span
+                  className={cn(
+                    'ml-1 w-40 shrink-0 overflow-hidden whitespace-nowrap transition-opacity duration-200 ease-linear',
+                    collapsed ? 'opacity-0' : 'opacity-100',
+                  )}
+                >
+                  {section.label}
+                </span>
+              </button>
+            );
+
+            return collapsed ? (
+              <Tooltip key={section.id}>
+                <TooltipTrigger asChild>{button}</TooltipTrigger>
+                <TooltipContent side="right" align="center" className="z-50">
+                  {section.label}
+                </TooltipContent>
+              </Tooltip>
+            ) : button;
+          })}
+        </nav>
+      </div>
+
+      <div
+        className={cn(
+          'p-3 transition-[opacity] duration-200 ease-linear',
+          collapsed && 'pointer-events-none opacity-0',
+        )}
+      >
+        <div className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-background/35 px-3 py-3 text-xs leading-5 text-muted-foreground')}>
+          <div className="font-medium text-foreground">当前 Timeline</div>
           <div className="mt-1">{selectedStorylineTitle ?? '尚未初始化'}</div>
         </div>
-      </SidebarFooter>
-      <SidebarRail />
-    </>
+      </div>
+    </aside>
   );
 }
 
@@ -453,14 +655,21 @@ export function SettingsRoute() {
   const queryClient = useQueryClient();
   const [activeSection, setActiveSection] = useState<SettingsSectionId>('general');
   const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>(undefined);
-  const [memoryStatusFilter, setMemoryStatusFilter] = useState<string>(ALL_VALUE);
+  const [memoryStatusFilter, setMemoryStatusFilter] = useState<string>('active');
   const [memoryKindFilter, setMemoryKindFilter] = useState<string>(ALL_VALUE);
   const [memorySourceFilter, setMemorySourceFilter] = useState<string>(ALL_VALUE);
   const [memoryLinkFilter, setMemoryLinkFilter] = useState<string>(ALL_VALUE);
+  const [memoryRiskFilter, setMemoryRiskFilter] = useState<string>(ALL_VALUE);
   const [memorySearch, setMemorySearch] = useState('');
+  const [memoryBatchMode, setMemoryBatchMode] = useState(false);
+  const [selectedMemoryIds, setSelectedMemoryIds] = useState<string[]>([]);
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | undefined>(undefined);
+  const [selectedActivityLogId, setSelectedActivityLogId] = useState<string | undefined>(undefined);
   const [correctionTarget, setCorrectionTarget] = useState<MemoryRecord | null>(null);
   const [correctionContent, setCorrectionContent] = useState('');
+  const [activityLogFilter, setActivityLogFilter] = useState<ActivityLogFilter>('all');
+  const [suppressionPattern, setSuppressionPattern] = useState('');
+  const [suppressionReason, setSuppressionReason] = useState('');
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState('');
   const [auxiliaryDraft, setAuxiliaryDraft] = useState<UpdateAuxiliaryLlmSettingsRequest>(() => createAuxiliaryLlmDraft(DEFAULT_PROFILE_ID));
@@ -469,6 +678,7 @@ export function SettingsRoute() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [shouldCollapseSidebar, setShouldCollapseSidebar] = useState(false);
   const [showFloatingSectionHeader, setShowFloatingSectionHeader] = useState(false);
+  const [showContentTopFade, setShowContentTopFade] = useState(false);
   const sectionScrollRef = useRef<HTMLDivElement | null>(null);
   const sectionHeroRef = useRef<HTMLDivElement | null>(null);
 
@@ -477,6 +687,12 @@ export function SettingsRoute() {
   const storylinesQuery = useQuery({ queryKey: ['storylines'], queryFn: fetchStorylines });
   const activeStorylineQuery = useQuery({ queryKey: ['active-storyline'], queryFn: fetchActiveStoryline });
   const activeStoryline = activeStorylineQuery.data?.activeStoryline;
+  const runtimeDiagnosticsQuery = useQuery({
+    queryKey: ['runtime-diagnostics', activeStoryline?.id],
+    queryFn: () => fetchRuntimeDiagnostics(activeStoryline!.id),
+    enabled: Boolean(activeStoryline?.id),
+    refetchInterval: (query) => query.state.data?.status === 'processing' ? 1000 : false,
+  });
   const profiles = profilesQuery.data?.profiles ?? [];
   const currentProfileId = profilesQuery.data?.activeProfileId ?? activeProfileId ?? DEFAULT_PROFILE_ID;
   const effectiveSelectedProfileId = selectedProfileId ?? currentProfileId;
@@ -498,6 +714,16 @@ export function SettingsRoute() {
     queryFn: () => fetchActivityLogs(selectedStoryline!.id),
     enabled: Boolean(selectedStoryline?.id),
   });
+  const suppressedMemoriesQuery = useQuery({
+    queryKey: ['storyline-suppressed-memories', selectedStoryline?.id],
+    queryFn: () => fetchSuppressedMemories(selectedStoryline!.id),
+    enabled: Boolean(selectedStoryline?.id),
+  });
+  const pendingSemanticFramesQuery = useQuery({
+    queryKey: ['storyline-pending-semantic-frames', selectedStoryline?.id],
+    queryFn: () => fetchPendingSemanticFrames(selectedStoryline!.id),
+    enabled: Boolean(selectedStoryline?.id),
+  });
   const auxiliaryLlmSettingsQuery = useQuery({
     queryKey: ['auxiliary-llm-settings', effectiveSelectedProfileId],
     queryFn: () => fetchAuxiliaryLlmSettings(effectiveSelectedProfileId || DEFAULT_PROFILE_ID),
@@ -505,12 +731,36 @@ export function SettingsRoute() {
 
   const memories = selectedStoryline ? (memoriesQuery.data?.memories ?? []) : [];
   const activityLogs = selectedStoryline ? (activityLogsQuery.data?.activityLogs ?? []) : [];
+  const suppressedMemories = selectedStoryline ? (suppressedMemoriesQuery.data?.suppressedMemories ?? []) : [];
+  const pendingSemanticFrames = selectedStoryline ? (pendingSemanticFramesQuery.data?.pendingSemanticFrames ?? []) : [];
   const memoryKinds = Array.from(new Set(memories.map((memory) => memory.kind ?? 'unclassified'))).sort();
   const memorySources = Array.from(new Set(memories.map((memory) => memory.source))).sort();
   const summaryMemories = memories.filter((memory) => memory.source === 'summary');
-  const duplicateKeepers = memories.filter((memory) => (memory.supersedes?.length ?? 0) > 0);
-  const hiddenDuplicates = memories.filter((memory) => memory.status === 'hidden' && Boolean(memory.supersededBy));
-  const replacementMemories = memories.filter((memory) => (memory.supersedes?.length ?? 0) > 0 && memory.source !== 'summary');
+  const duplicateKeepers = memories.filter((memory) => getMemoryAuditRole(memory, memories) === 'duplicate_keeper');
+  const manualReplacementMemories = memories.filter((memory) => getMemoryAuditRole(memory, memories) === 'manual_replacement');
+  const hiddenDuplicates = memories.filter((memory) => getMemoryAuditRole(memory, memories) === 'hidden_duplicate');
+  const supersededByManualMemories = memories.filter((memory) => getMemoryAuditRole(memory, memories) === 'superseded_by_manual_replacement');
+  const replacementMemories = [...manualReplacementMemories, ...supersededByManualMemories];
+  const riskMemoryCount = memories.filter((memory) => getMemoryRiskTags(memory, { activityLogs }).length > 0).length;
+  const activeActivityLogs = activityLogs.filter((activityLog) => activityLog.status === 'active');
+  const hiddenActivityLogs = activityLogs.filter((activityLog) => activityLog.status === 'hidden');
+  const consolidatedActivityLogs = activityLogs.filter(isActivityLogConsolidated);
+  const referencedActivityLogs = activityLogs.filter((activityLog) => activityReferencedByMemories(activityLog.id, memories).length > 0);
+  const filteredActivityLogs = activityLogs.filter((activityLog) => {
+    if (activityLogFilter === 'active' || activityLogFilter === 'hidden') {
+      return activityLog.status === activityLogFilter;
+    }
+    if (activityLogFilter === 'consolidated') {
+      return isActivityLogConsolidated(activityLog);
+    }
+    if (activityLogFilter === 'referenced') {
+      return activityReferencedByMemories(activityLog.id, memories).length > 0;
+    }
+    if (activityLogFilter === 'unreferenced') {
+      return activityReferencedByMemories(activityLog.id, memories).length === 0;
+    }
+    return true;
+  });
 
   const filteredMemories = useMemo(() => {
     return filterSettingsMemories(memories, {
@@ -518,11 +768,13 @@ export function SettingsRoute() {
       kind: memoryKindFilter,
       source: memorySourceFilter,
       link: memoryLinkFilter,
+      risk: memoryRiskFilter,
       search: memorySearch,
-    });
-  }, [memories, memoryKindFilter, memoryLinkFilter, memorySearch, memorySourceFilter, memoryStatusFilter]);
+    }, { activityLogs });
+  }, [activityLogs, memories, memoryKindFilter, memoryLinkFilter, memoryRiskFilter, memorySearch, memorySourceFilter, memoryStatusFilter]);
 
   const selectedMemory = memories.find((memory) => memory.id === selectedMemoryId) ?? null;
+  const selectedActivityLog = activityLogs.find((activityLog) => activityLog.id === selectedActivityLogId) ?? null;
   const auxiliarySettings = auxiliaryLlmSettingsQuery.data?.settings;
   const auxiliaryStatus = auxiliaryLlmSettingsQuery.data?.status;
   const showDeepSeekControls = isDeepSeekAuxiliaryDraft(auxiliaryDraft);
@@ -544,7 +796,7 @@ export function SettingsRoute() {
       return;
     }
 
-    const mediaQuery = window.matchMedia('(max-width: 768px)');
+    const mediaQuery = window.matchMedia('(max-width: 1023px)');
     const syncSidebarCollapse = () => setShouldCollapseSidebar(mediaQuery.matches);
     syncSidebarCollapse();
     mediaQuery.addEventListener('change', syncSidebarCollapse);
@@ -562,10 +814,13 @@ export function SettingsRoute() {
 
   useEffect(() => {
     setSelectedMemoryId(undefined);
+    setSelectedMemoryIds([]);
+    setMemoryBatchMode(false);
   }, [effectiveSelectedProfileId, selectedStoryline?.id]);
 
   useEffect(() => {
     setShowFloatingSectionHeader(false);
+    setShowContentTopFade(false);
     const node = sectionScrollRef.current;
     if (node) {
       node.scrollTo({ top: 0, behavior: 'auto' });
@@ -578,7 +833,10 @@ export function SettingsRoute() {
       queryClient.invalidateQueries({ queryKey: ['storylines'] }),
       queryClient.invalidateQueries({ queryKey: ['storyline-memories'] }),
       queryClient.invalidateQueries({ queryKey: ['storyline-activity'] }),
+      queryClient.invalidateQueries({ queryKey: ['storyline-suppressed-memories'] }),
+      queryClient.invalidateQueries({ queryKey: ['storyline-pending-semantic-frames'] }),
       queryClient.invalidateQueries({ queryKey: ['context-preview'] }),
+      queryClient.invalidateQueries({ queryKey: ['runtime-diagnostics'] }),
     ]);
   };
 
@@ -602,6 +860,7 @@ export function SettingsRoute() {
       queryClient.setQueryData<ProfilesResponse>(['profiles-page'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
       queryClient.setQueryData<ProfilesResponse>(['profiles-settings'], (payload) => markActiveProfileInResponse(payload, nextProfileId, result.activeProfile));
       setActiveProfileId(nextProfileId);
+      setSelectedProfileId(nextProfileId);
       const storylineResult = await activateStorylineForProfile(nextProfileId);
       setActiveStorylineId(storylineResult.activeStoryline?.id);
       await Promise.all([
@@ -656,9 +915,37 @@ export function SettingsRoute() {
     onSuccess: () => invalidateStorylineState(),
   });
 
+  const deleteMemoryMutation = useMutation({
+    mutationFn: (memoryId: string) => deleteMemory(memoryId),
+    onSuccess: () => invalidateStorylineState(),
+  });
+
   const restoreMemoryMutation = useMutation({
     mutationFn: (memoryId: string) => restoreMemory(memoryId),
     onSuccess: () => invalidateStorylineState(),
+  });
+
+  const permanentlyDeleteMemoryMutation = useMutation({
+    mutationFn: (memoryId: string) => permanentlyDeleteMemory(memoryId),
+    onSuccess: async (_, memoryId) => {
+      setSelectedMemoryIds((current) => current.filter((id) => id !== memoryId));
+      if (selectedMemoryId === memoryId) {
+        setSelectedMemoryId(undefined);
+      }
+      await invalidateStorylineState();
+    },
+  });
+
+  const batchMemoryMutation = useMutation({
+    mutationFn: (action: 'hide' | 'restore' | 'delete') => batchUpdateMemories(selectedStoryline!.id, {
+      memoryIds: selectedMemoryIds,
+      action,
+    }),
+    onSuccess: async () => {
+      setSelectedMemoryIds([]);
+      setMemoryBatchMode(false);
+      await invalidateStorylineState();
+    },
   });
 
   const correctMemoryMutation = useMutation({
@@ -673,6 +960,38 @@ export function SettingsRoute() {
 
   const consolidateMutation = useMutation({
     mutationFn: () => consolidateStorylineMemory(selectedStoryline!.id),
+    onSuccess: () => invalidateStorylineState(),
+  });
+
+  const createSuppressionMutation = useMutation({
+    mutationFn: () => createSuppressedMemory(selectedStoryline!.id, {
+      pattern: suppressionPattern.trim(),
+      reason: suppressionReason.trim() || undefined,
+    }),
+    onSuccess: async () => {
+      setSuppressionPattern('');
+      setSuppressionReason('');
+      await invalidateStorylineState();
+    },
+  });
+
+  const deleteSuppressionMutation = useMutation({
+    mutationFn: (suppressionId: string) => deleteSuppressedMemory(suppressionId),
+    onSuccess: () => invalidateStorylineState(),
+  });
+
+  const hideActivityLogMutation = useMutation({
+    mutationFn: (activityId: string) => hideActivityLog(activityId),
+    onSuccess: () => invalidateStorylineState(),
+  });
+
+  const confirmPendingFrameMutation = useMutation({
+    mutationFn: (frame: PendingSemanticFrame) => confirmPendingSemanticFrame(frame.storylineId, frame.id),
+    onSuccess: () => invalidateStorylineState(),
+  });
+
+  const cancelPendingFrameMutation = useMutation({
+    mutationFn: (frame: PendingSemanticFrame) => cancelPendingSemanticFrame(frame.storylineId, frame.id),
     onSuccess: () => invalidateStorylineState(),
   });
 
@@ -737,22 +1056,75 @@ export function SettingsRoute() {
     },
   });
 
-  const actionPending = hideMemoryMutation.isPending || restoreMemoryMutation.isPending || correctMemoryMutation.isPending;
+  const actionPending = hideMemoryMutation.isPending
+    || deleteMemoryMutation.isPending
+    || restoreMemoryMutation.isPending
+    || permanentlyDeleteMemoryMutation.isPending
+    || batchMemoryMutation.isPending
+    || correctMemoryMutation.isPending;
   const operationError =
     switchProfileMutation.error
     ?? initializeStorylineMutation.error
     ?? hideMemoryMutation.error
+    ?? deleteMemoryMutation.error
     ?? restoreMemoryMutation.error
+    ?? permanentlyDeleteMemoryMutation.error
+    ?? batchMemoryMutation.error
     ?? correctMemoryMutation.error
     ?? consolidateMutation.error
+    ?? createSuppressionMutation.error
+    ?? deleteSuppressionMutation.error
+    ?? hideActivityLogMutation.error
+    ?? confirmPendingFrameMutation.error
+    ?? cancelPendingFrameMutation.error
     ?? resetProfileMutation.error
     ?? auxiliarySettingsMutation.error
     ?? clearAuxiliaryApiKeyMutation.error
     ?? auxiliaryTestMutation.error;
 
+  function toggleSelectedMemory(memoryId: string, selected: boolean) {
+    setSelectedMemoryIds((current) => {
+      if (selected) {
+        return current.includes(memoryId) ? current : [...current, memoryId];
+      }
+      return current.filter((id) => id !== memoryId);
+    });
+  }
+
+  function toggleMemorySelection(memoryId: string) {
+    setSelectedMemoryIds((current) => (
+      current.includes(memoryId)
+        ? current.filter((id) => id !== memoryId)
+        : [...current, memoryId]
+    ));
+  }
+
+  function setVisibleMemoriesSelected(selected: boolean) {
+    setSelectedMemoryIds((current) => {
+      const visibleIds = filteredMemories.map((memory) => memory.id);
+      if (selected) {
+        return Array.from(new Set([...current, ...visibleIds]));
+      }
+      const visibleIdSet = new Set(visibleIds);
+      return current.filter((id) => !visibleIdSet.has(id));
+    });
+  }
+
+  function exitMemoryBatchMode() {
+    setMemoryBatchMode(false);
+    setSelectedMemoryIds([]);
+  }
+
   function openCorrection(memory: MemoryRecord) {
     setCorrectionTarget(memory);
     setCorrectionContent(memory.content);
+  }
+
+  function scrollToAuditSection(id: string) {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   function handleSectionScroll() {
@@ -762,6 +1134,9 @@ export function SettingsRoute() {
       return;
     }
 
+    const nextFadeVisible = scrollNode.scrollTop > 4;
+    setShowContentTopFade((current) => (current === nextFadeVisible ? current : nextFadeVisible));
+
     const scrollRect = scrollNode.getBoundingClientRect();
     const heroRect = heroNode.getBoundingClientRect();
     const nextVisible = heroRect.bottom <= scrollRect.top;
@@ -769,6 +1144,20 @@ export function SettingsRoute() {
   }
 
   const ActiveSectionIcon = activeSectionMeta.icon;
+  const isSelectedProfileActive = effectiveSelectedProfileId === currentProfileId;
+  const selectedTimelineIsCurrent = Boolean(
+    existingSelectedStoryline?.id && activeStoryline?.id === existingSelectedStoryline.id,
+  );
+  const profileSwitchDisabled = !effectiveSelectedProfileId || isSelectedProfileActive || switchProfileMutation.isPending;
+  const timelineActionDisabled = !effectiveSelectedProfileId
+    || selectedTimelineIsCurrent
+    || initializeStorylineMutation.isPending;
+  const timelineActionLabel = existingSelectedStoryline
+    ? '设为当前 Timeline'
+    : '初始化 Timeline';
+  const profileSwitchButtonLabel = switchProfileMutation.isPending
+    ? '正在切换 Profile...'
+    : isSelectedProfileActive ? '当前 Profile' : '切换到此 Profile';
 
   const sectionContent = (() => {
     if (activeSection === 'general') {
@@ -776,7 +1165,7 @@ export function SettingsRoute() {
         <div className="space-y-4">
           <SettingsCard
             title="当前 Timeline"
-            description="普通聊天仍以当前 Storyline 为主；设置中心只负责维护入口。"
+            description="下拉选择要维护的 Profile；切换 Profile 会改变运行中的 Hermes Profile；Timeline 按钮只作用于当前运行 Profile。"
           >
             <div className="space-y-3">
               <Select
@@ -796,40 +1185,76 @@ export function SettingsRoute() {
                 </SelectContent>
               </Select>
 
+              <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+                <div className={cn(SETTINGS_INNER_RADIUS, 'border border-border/60 bg-background/35 px-3 py-2')}>
+                  <div>正在管理</div>
+                  <div className="mt-1 truncate font-medium text-foreground">{selectedProfile?.name ?? effectiveSelectedProfileId}</div>
+                </div>
+                <div className={cn(SETTINGS_INNER_RADIUS, 'border border-border/60 bg-background/35 px-3 py-2')}>
+                  <div>运行 Profile</div>
+                  <div className="mt-1 truncate font-medium text-foreground">{currentProfileId}</div>
+                </div>
+                <div className={cn(SETTINGS_INNER_RADIUS, 'border border-border/60 bg-background/35 px-3 py-2')}>
+                  <div>Timeline 状态</div>
+                  <div className="mt-1 truncate font-medium text-foreground">
+                    {existingSelectedStoryline ? selectedTimelineIsCurrent ? '当前已激活' : '已初始化' : '未初始化'}
+                  </div>
+                </div>
+              </div>
+
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={!effectiveSelectedProfileId || switchProfileMutation.isPending}
+                  disabled={profileSwitchDisabled}
                   onClick={() => switchProfileMutation.mutate(effectiveSelectedProfileId)}
                 >
-                  切换 Profile
+                  {switchProfileMutation.isPending ? (
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  ) : isSelectedProfileActive ? (
+                    <CheckCircle2 className="mr-2 h-4 w-4" />
+                  ) : (
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                  )}
+                  {profileSwitchButtonLabel}
                 </Button>
+                {isSelectedProfileActive && !selectedTimelineIsCurrent ? (
+                  <Button
+                    type="button"
+                    disabled={timelineActionDisabled}
+                    onClick={() => initializeStorylineMutation.mutate()}
+                  >
+                    {timelineActionLabel}
+                  </Button>
+                ) : null}
                 <Button
                   type="button"
-                  disabled={!effectiveSelectedProfileId || initializeStorylineMutation.isPending}
-                  onClick={() => initializeStorylineMutation.mutate()}
-                >
-                  {existingSelectedStoryline ? '激活 Timeline' : '初始化 Timeline'}
-                </Button>
-                <Button
-                  type="button"
-                  variant="destructive"
+                  variant="ghost"
+                  className='ml-auto'
                   disabled={!effectiveSelectedProfileId || resetProfileMutation.isPending}
                   onClick={() => {
                     setResetConfirmation('');
                     setResetDialogOpen(true);
                   }}
                 >
-                  重置
+                  重置此 Profile
                 </Button>
               </div>
+              {switchProfileMutation.isPending ? (
+                <div className={cn(SETTINGS_INNER_RADIUS, 'flex items-center gap-2 border border-primary/25 bg-primary/5 px-3 py-2 text-xs text-muted-foreground')}>
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin text-primary" />
+                  <span>正在切换 Hermes Profile，并同步当前 Timeline 与会话列表。</span>
+                </div>
+              ) : null}
 
               <div className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-background/35 p-3 text-sm leading-6')}>
                 <div className="font-medium text-foreground">{selectedStoryline?.title ?? '暂无当前 Timeline'}</div>
                 <div className="mt-1 text-muted-foreground">
                   Profile：{selectedStoryline?.hermesProfileId ?? effectiveSelectedProfileId}
                 </div>
+                {!isSelectedProfileActive ? (
+                  <div className="mt-1 text-muted-foreground">此 Profile 只是管理目标；切换后才会接管主聊天和 Timeline。</div>
+                ) : null}
               </div>
             </div>
           </SettingsCard>
@@ -1038,17 +1463,48 @@ export function SettingsRoute() {
             {selectedStoryline ? (
               <>
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-xs text-muted-foreground">{filteredMemories.length} / {memories.length}</div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => memoriesQuery.refetch()}
-                    disabled={memoriesQuery.isFetching}
-                  >
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    刷新
-                  </Button>
+                  <div className="text-xs text-muted-foreground">
+                    {filteredMemories.length} / {memories.length}
+                    {memoryBatchMode ? `，已选 ${selectedMemoryIds.length}` : ''}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {memoryBatchMode ? (
+                      <>
+                        <Button type="button" variant="outline" size="sm" onClick={() => setVisibleMemoriesSelected(true)} disabled={filteredMemories.length === 0}>
+                          选择当前筛选
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" onClick={() => setSelectedMemoryIds([])} disabled={selectedMemoryIds.length === 0}>
+                          清空选择
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" onClick={() => batchMemoryMutation.mutate('hide')} disabled={!selectedStoryline || selectedMemoryIds.length === 0 || batchMemoryMutation.isPending}>
+                          批量隐藏
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" onClick={() => batchMemoryMutation.mutate('restore')} disabled={!selectedStoryline || selectedMemoryIds.length === 0 || batchMemoryMutation.isPending}>
+                          批量恢复
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" onClick={() => batchMemoryMutation.mutate('delete')} disabled={!selectedStoryline || selectedMemoryIds.length === 0 || batchMemoryMutation.isPending}>
+                          批量删除
+                        </Button>
+                        <Button type="button" variant="outline" size="sm" onClick={exitMemoryBatchMode}>
+                          完成
+                        </Button>
+                      </>
+                    ) : (
+                      <Button type="button" variant="outline" size="sm" onClick={() => setMemoryBatchMode(true)} disabled={filteredMemories.length === 0}>
+                        批量管理
+                      </Button>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => memoriesQuery.refetch()}
+                      disabled={memoriesQuery.isFetching}
+                    >
+                      <RefreshCw className="mr-2 h-4 w-4" />
+                      刷新
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="mt-4 grid gap-2">
@@ -1061,7 +1517,7 @@ export function SettingsRoute() {
                       className="bg-card/60 pl-9"
                     />
                   </div>
-                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-5">
                     <Select value={memoryStatusFilter} onValueChange={setMemoryStatusFilter}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
@@ -1094,6 +1550,15 @@ export function SettingsRoute() {
                         <SelectItem value="unlinked">无链路</SelectItem>
                       </SelectContent>
                     </Select>
+                    <Select value={memoryRiskFilter} onValueChange={setMemoryRiskFilter}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={ALL_VALUE}>全部风险</SelectItem>
+                        {Object.entries(MEMORY_RISK_LABELS).map(([value, label]) => (
+                          <SelectItem key={value} value={value}>{label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
 
@@ -1102,22 +1567,134 @@ export function SettingsRoute() {
                     <SettingsPanelSkeleton />
                   ) : filteredMemories.length > 0 ? (
                     <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
-                      {filteredMemories.map((memory) => (
-                        <div key={memory.id} className={cn(SETTINGS_SURFACE_RADIUS, 'border border-border/70 bg-card/45 p-4')}>
-                          <div className="mb-2 flex flex-wrap gap-1.5">
-                            <Badge variant={statusVariant(memory.status)}>{memory.status}</Badge>
-                            <Badge variant="outline">{memory.kind ?? 'unclassified'}</Badge>
-                            <Badge variant="secondary">{memory.source}</Badge>
+                      {filteredMemories.map((memory) => {
+                        const selected = selectedMemoryIds.includes(memory.id);
+                        return (
+                          <div
+                            key={memory.id}
+                            className={cn(
+                              SETTINGS_SURFACE_RADIUS,
+                              'relative border bg-card/45 p-4 transition',
+                              memoryBatchMode ? 'cursor-pointer hover:border-primary/60 hover:bg-primary/5' : 'border-border/70',
+                              selected ? 'border-primary bg-primary/10 ring-2 ring-primary/25' : 'border-border/70',
+                            )}
+                            role={memoryBatchMode ? 'button' : undefined}
+                            tabIndex={memoryBatchMode ? 0 : undefined}
+                            aria-pressed={memoryBatchMode ? selected : undefined}
+                            onClick={() => {
+                              if (memoryBatchMode) {
+                                toggleMemorySelection(memory.id);
+                              }
+                            }}
+                            onKeyDown={(event) => {
+                              if (!memoryBatchMode || (event.key !== 'Enter' && event.key !== ' ')) {
+                                return;
+                              }
+                              event.preventDefault();
+                              toggleMemorySelection(memory.id);
+                            }}
+                          >
+                          <div className="mb-2 flex items-start justify-between gap-2">
+                            <div className="flex min-w-0 flex-wrap gap-1.5">
+                              {memoryBatchMode ? (
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5 h-4 w-4 accent-primary"
+                                  checked={selected}
+                                  onClick={(event) => event.stopPropagation()}
+                                  onChange={(event) => toggleSelectedMemory(memory.id, event.target.checked)}
+                                  aria-label="选择记忆"
+                                />
+                              ) : null}
+                              <Badge variant={statusVariant(memory.status)}>{memory.status}</Badge>
+                              <Badge variant="outline">{memory.kind ?? 'unclassified'}</Badge>
+                              <Badge variant="secondary">{memory.source}</Badge>
+                              <MemoryRiskBadges memory={memory} activityLogs={activityLogs} />
+                            </div>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-8 w-8 shrink-0 p-0"
+                                  onClick={(event) => event.stopPropagation()}
+                                  aria-label="记忆操作"
+                                >
+                                  <MoreHorizontal className="h-4 w-4" />
+                                </Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                {memory.status === 'deleted' ? (
+                                  <>
+                                    <DropdownMenuItem
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        restoreMemoryMutation.mutate(memory.id);
+                                      }}
+                                      disabled={actionPending}
+                                    >
+                                      <RotateCcw className="mr-2 h-4 w-4" />
+                                      恢复
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      className="text-destructive focus:text-destructive"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        permanentlyDeleteMemoryMutation.mutate(memory.id);
+                                      }}
+                                      disabled={actionPending}
+                                    >
+                                      <Trash2 className="mr-2 h-4 w-4" />
+                                      永久删除
+                                    </DropdownMenuItem>
+                                  </>
+                                ) : (
+                                  <>
+                                    <DropdownMenuItem
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        hideMemoryMutation.mutate(memory.id);
+                                      }}
+                                      disabled={memory.status === 'hidden' || actionPending}
+                                    >
+                                      <EyeOff className="mr-2 h-4 w-4" />
+                                      隐藏
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      className="text-destructive focus:text-destructive"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        deleteMemoryMutation.mutate(memory.id);
+                                      }}
+                                      disabled={actionPending}
+                                    >
+                                      <Trash2 className="mr-2 h-4 w-4" />
+                                      删除
+                                    </DropdownMenuItem>
+                                  </>
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </div>
                           <div className="line-clamp-3 text-sm leading-6 text-foreground">{memory.content}</div>
                           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                            <span>更新于 {formatDateTime(memory.updatedAt)}</span>
-                            <Button type="button" variant="outline" size="sm" onClick={() => setSelectedMemoryId(memory.id)}>
+                            <span>事件 {formatDateTime(memory.sourceHappenedAtStart) || '无'} · 更新 {formatDateTime(memory.updatedAt)}</span>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setSelectedMemoryId(memory.id);
+                              }}
+                            >
                               查看详情
                             </Button>
                           </div>
-                        </div>
-                      ))}
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className={cn(SETTINGS_SURFACE_RADIUS, 'border border-border/70 bg-card/45 p-4 text-sm text-muted-foreground')}>
@@ -1138,16 +1715,32 @@ export function SettingsRoute() {
 
     if (activeSection === 'audit') {
       return (
-        <div className="grid gap-4 xl:grid-cols-3">
+        <div className="space-y-4">
           <SettingsCard
-            title="自动巩固审计"
-            description="查看 summary memory、ActivityLog 来源和 supersedes 链路。"
-            className="xl:col-span-3"
+            title="治理概览"
+            description="追溯记忆来源、替代链路和待处理语义帧。优先处理待确认、风险记忆和错误事件。"
           >
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-sm leading-6 text-muted-foreground">
-                这里保留面向治理的汇总视图，具体明细继续在 Memory 弹窗里查看。
-              </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              {[
+                { label: '待确认语义帧', value: pendingSemanticFrames.length, target: 'audit-pending', tone: pendingSemanticFrames.length > 0 ? 'text-primary' : 'text-foreground' },
+                { label: '风险记忆', value: riskMemoryCount, target: 'audit-summary', tone: riskMemoryCount > 0 ? 'text-destructive' : 'text-foreground' },
+                { label: 'Summary', value: summaryMemories.length, target: 'audit-summary', tone: 'text-foreground' },
+                { label: '替代链路', value: duplicateKeepers.length + replacementMemories.length, target: 'audit-replacements', tone: 'text-foreground' },
+                { label: 'Active 事件', value: activeActivityLogs.length, target: 'audit-activity', tone: 'text-foreground' },
+              ].map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-card/45 p-3 text-left transition hover:border-primary/60 hover:bg-primary/5')}
+                  onClick={() => scrollToAuditSection(item.target)}
+                >
+                  <div className={cn('text-2xl font-semibold tracking-tight', item.tone)}>{item.value}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{item.label}</div>
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-sm leading-6 text-muted-foreground">ActivityLog 是事件流水账，Memory 是最终沉淀的记忆；summary 和 replacement 都应该能回到来源事件或旧记忆。</div>
               <Button type="button" disabled={!selectedStoryline || consolidateMutation.isPending} onClick={() => consolidateMutation.mutate()}>
                 <Activity className="mr-2 h-4 w-4" />
                 手动巩固
@@ -1155,42 +1748,180 @@ export function SettingsRoute() {
             </div>
           </SettingsCard>
 
-          <SettingsCard title="Summary Memory">
+          <div className="grid gap-4 xl:grid-cols-3">
+          <SettingsCard id="audit-summary" title="Summary / Consolidation" description="系统把多条 ActivityLog 巩固成摘要记忆；点击卡片可查看完整详情。">
             <div className="space-y-2">
               {summaryMemories.length > 0 ? summaryMemories.map((memory) => (
-                <div key={memory.id} className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-card/45 p-3')}>
-                  <div className="text-sm leading-6">{memory.content}</div>
-                  <div className="mt-2 text-xs text-muted-foreground">来源 ActivityLog：{memory.sourceActivityIds?.length ?? 0}</div>
-                </div>
+                <button
+                  key={memory.id}
+                  type="button"
+                  className={cn(SETTINGS_INNER_RADIUS, 'block w-full border border-border/70 bg-card/45 p-3 text-left transition hover:border-primary/60 hover:bg-primary/5')}
+                  onClick={() => setSelectedMemoryId(memory.id)}
+                >
+                  <div className="line-clamp-4 text-sm leading-6">{memory.content}</div>
+                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    <span>来源事件：{memory.sourceActivityIds?.length ?? 0}</span>
+                    <span>事件 {formatDateTime(memory.sourceHappenedAtStart)}</span>
+                  </div>
+                  <div className="mt-3 space-y-1">
+                    {findActivitiesByIds(activityLogs, memory.sourceActivityIds).slice(0, 2).map((activityLog) => (
+                      <div key={activityLog.id} className={cn(SETTINGS_INNER_RADIUS, 'bg-background/40 px-2 py-1.5 text-xs leading-5 text-muted-foreground')}>
+                        <span className="line-clamp-2">{activityLog.summary}</span>
+                      </div>
+                    ))}
+                  </div>
+                </button>
               )) : <div className="text-sm text-muted-foreground">暂无 summary memory。</div>}
             </div>
           </SettingsCard>
 
-          <SettingsCard title="重复合并链路">
+          <SettingsCard id="audit-replacements" title="Replacement / Supersedes" description="区分重复合并 keeper 和人工纠正 replacement，避免把所有替代关系混成一类。">
             <div className="space-y-2">
+              <div className="text-xs font-medium text-muted-foreground">重复合并 keeper</div>
               {duplicateKeepers.length > 0 ? duplicateKeepers.map((memory) => (
-                <div key={memory.id} className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-card/45 p-3')}>
-                  <div className="text-sm leading-6">{memory.content}</div>
+                <button key={memory.id} type="button" className={cn(SETTINGS_INNER_RADIUS, 'block w-full border border-border/70 bg-card/45 p-3 text-left transition hover:border-primary/60 hover:bg-primary/5')} onClick={() => setSelectedMemoryId(memory.id)}>
+                  <div className="line-clamp-3 text-sm leading-6">{memory.content}</div>
                   <div className="mt-2 text-xs text-muted-foreground">supersedes：{memory.supersedes?.length ?? 0}</div>
-                </div>
+                </button>
               )) : <div className="text-sm text-muted-foreground">暂无合并 keeper。</div>}
-            </div>
-          </SettingsCard>
 
-          <SettingsCard title="Hidden / Replacement">
-            <div className="space-y-2">
-              {[...hiddenDuplicates, ...replacementMemories].length > 0 ? [...hiddenDuplicates, ...replacementMemories].map((memory) => (
-                <div key={memory.id} className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-card/45 p-3')}>
+              <div className="pt-2 text-xs font-medium text-muted-foreground">人工纠正 replacement</div>
+              {manualReplacementMemories.length > 0 ? manualReplacementMemories.map((memory) => (
+                <button key={memory.id} type="button" className={cn(SETTINGS_INNER_RADIUS, 'block w-full border border-border/70 bg-card/45 p-3 text-left transition hover:border-primary/60 hover:bg-primary/5')} onClick={() => setSelectedMemoryId(memory.id)}>
                   <div className="flex gap-2">
                     <Badge variant={statusVariant(memory.status)}>{memory.status}</Badge>
                     <Badge variant="outline">{memory.source}</Badge>
+                    <Badge variant="secondary">manual correction</Badge>
                   </div>
-                  <div className="mt-2 text-sm leading-6">{memory.content}</div>
-                  <div className="mt-2 text-xs text-muted-foreground">supersededBy：{memory.supersededBy ?? '无'}</div>
-                </div>
-              )) : <div className="text-sm text-muted-foreground">暂无 replacement 或 hidden duplicate。</div>}
+                  <div className="mt-2 line-clamp-3 text-sm leading-6">{memory.content}</div>
+                  <div className="mt-2 text-xs text-muted-foreground">替代了：{memory.supersedes?.map((id) => formatMemoryPreview(memories.find((item) => item.id === id))).join('、') || '无'}</div>
+                </button>
+              )) : <div className="text-sm text-muted-foreground">暂无人工纠正 replacement。</div>}
             </div>
           </SettingsCard>
+
+          <SettingsCard title="Hidden Memory" description="这些是被 keeper 或 replacement 替代后隐藏的旧记忆，仍保留审计链。">
+            <div className="space-y-2">
+              {[...hiddenDuplicates, ...supersededByManualMemories].length > 0 ? [...hiddenDuplicates, ...supersededByManualMemories].map((memory) => {
+                const replacement = memories.find((item) => item.id === memory.supersededBy);
+                return (
+                  <button key={memory.id} type="button" className={cn(SETTINGS_INNER_RADIUS, 'block w-full border border-border/70 bg-card/45 p-3 text-left transition hover:border-primary/60 hover:bg-primary/5')} onClick={() => setSelectedMemoryId(memory.id)}>
+                    <div className="flex gap-2">
+                      <Badge variant={statusVariant(memory.status)}>{memory.status}</Badge>
+                      <Badge variant="outline">{getMemoryAuditRole(memory, memories) === 'hidden_duplicate' ? 'duplicate hidden' : 'superseded old memory'}</Badge>
+                    </div>
+                    <div className="mt-2 line-clamp-3 text-sm leading-6">{memory.content}</div>
+                    <div className="mt-2 text-xs text-muted-foreground">被替代为：{formatMemoryPreview(replacement)}</div>
+                  </button>
+                );
+              }) : <div className="text-sm text-muted-foreground">暂无 hidden replacement 链路。</div>}
+            </div>
+          </SettingsCard>
+
+          <SettingsCard title="Suppression Rules" description="不希望系统主动提起的主题规则。">
+            <div className="space-y-3">
+              <div className="grid gap-2">
+                <Input value={suppressionPattern} onChange={(event) => setSuppressionPattern(event.target.value)} placeholder="pattern" className="bg-card/60" />
+                <Input value={suppressionReason} onChange={(event) => setSuppressionReason(event.target.value)} placeholder="reason" className="bg-card/60" />
+                <Button type="button" variant="outline" disabled={!selectedStoryline || !suppressionPattern.trim() || createSuppressionMutation.isPending} onClick={() => createSuppressionMutation.mutate()}>
+                  添加规则
+                </Button>
+              </div>
+              <div className="space-y-2">
+                {suppressedMemories.length > 0 ? suppressedMemories.map((suppression) => (
+                  <div key={suppression.id} className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-card/45 p-3')}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{suppression.pattern}</div>
+                        <div className="mt-1 text-xs text-muted-foreground">{suppression.reason || '未记录 reason'}</div>
+                      </div>
+                      <Button type="button" variant="outline" size="sm" onClick={() => deleteSuppressionMutation.mutate(suppression.id)} disabled={deleteSuppressionMutation.isPending}>
+                        删除
+                      </Button>
+                    </div>
+                  </div>
+                )) : <div className="text-sm text-muted-foreground">暂无 suppression rule。</div>}
+              </div>
+            </div>
+          </SettingsCard>
+
+          <SettingsCard id="audit-pending" title="Pending Semantic Frames" description="系统不确定的关系或语义变化会先放在这里，确认后才正式写入 memory。">
+            <div className="space-y-2">
+              {pendingSemanticFrames.length > 0 ? pendingSemanticFrames.map((frame) => (
+                <div key={frame.id} className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-card/45 p-3')}>
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    <Badge variant="outline">{frame.kind}</Badge>
+                    <Badge variant="outline">{frame.status}</Badge>
+                  </div>
+                  <div className="text-sm leading-6">{frame.candidate.content}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{frame.prompt}</div>
+                  <div className="mt-3 flex gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={() => confirmPendingFrameMutation.mutate(frame)} disabled={confirmPendingFrameMutation.isPending}>
+                      确认写入
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => cancelPendingFrameMutation.mutate(frame)} disabled={cancelPendingFrameMutation.isPending}>
+                      取消
+                    </Button>
+                  </div>
+                </div>
+              )) : <div className="text-sm text-muted-foreground">暂无待确认语义帧。</div>}
+            </div>
+          </SettingsCard>
+
+          <SettingsCard id="audit-activity" title="ActivityLog 事件流水账" description="ActivityLog 是生成记忆前的事件记录。可查看是否已巩固、是否被 memory 引用，并隐藏错误事件。" className="xl:col-span-3">
+            <div className="mb-4 grid gap-3 md:grid-cols-4">
+              <div className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-card/45 p-3')}><div className="text-2xl font-semibold">{activityLogs.length}</div><div className="text-xs text-muted-foreground">全部事件</div></div>
+              <div className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-card/45 p-3')}><div className="text-2xl font-semibold">{consolidatedActivityLogs.length}</div><div className="text-xs text-muted-foreground">已巩固</div></div>
+              <div className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-card/45 p-3')}><div className="text-2xl font-semibold">{referencedActivityLogs.length}</div><div className="text-xs text-muted-foreground">被记忆引用</div></div>
+              <div className={cn(SETTINGS_INNER_RADIUS, 'border border-border/70 bg-card/45 p-3')}><div className="text-2xl font-semibold">{hiddenActivityLogs.length}</div><div className="text-xs text-muted-foreground">已隐藏</div></div>
+            </div>
+            <div className="mb-4">
+              <Select value={activityLogFilter} onValueChange={(value) => setActivityLogFilter(value as ActivityLogFilter)}>
+                <SelectTrigger className="max-w-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {ACTIVITY_LOG_FILTERS.map((filter) => <SelectItem key={filter} value={filter}>{ACTIVITY_LOG_FILTER_LABELS[filter]}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+              {filteredActivityLogs.length > 0 ? filteredActivityLogs.slice(0, 30).map((activityLog) => {
+                const referencedBy = activityReferencedByMemories(activityLog.id, memories);
+                return (
+                  <div
+                    key={activityLog.id}
+                    role="button"
+                    tabIndex={0}
+                    className={cn(SETTINGS_INNER_RADIUS, 'cursor-pointer border border-border/70 bg-card/45 p-3 text-left transition hover:border-primary/60 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring')}
+                    onClick={() => setSelectedActivityLogId(activityLog.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setSelectedActivityLogId(activityLog.id);
+                      }
+                    }}
+                  >
+                    <div className="mb-2 flex flex-wrap gap-1.5">
+                      <Badge variant={statusVariant(activityLog.status)}>{activityLog.status}</Badge>
+                      {isActivityLogConsolidated(activityLog) ? <Badge variant="secondary">已巩固</Badge> : <Badge variant="outline">未巩固</Badge>}
+                      {referencedBy.length > 0 ? <Badge variant="secondary">引用 {referencedBy.length}</Badge> : <Badge variant="outline">未引用</Badge>}
+                      {activityLog.tags.slice(0, 3).map((tag) => <Badge key={tag} variant="outline">{tag}</Badge>)}
+                    </div>
+                    <div className="line-clamp-3 text-sm leading-6">{activityLog.summary}</div>
+                    <div className="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                      <span>{formatDateTime(activityLog.happenedAt)}</span>
+                      <Button type="button" variant="outline" size="sm" onClick={(event) => {
+                        event.stopPropagation();
+                        hideActivityLogMutation.mutate(activityLog.id);
+                      }} disabled={activityLog.status !== 'active' || hideActivityLogMutation.isPending}>
+                        隐藏
+                      </Button>
+                    </div>
+                  </div>
+                );
+              }) : <div className="text-sm text-muted-foreground">当前筛选下暂无 ActivityLog。</div>}
+            </div>
+          </SettingsCard>
+          </div>
         </div>
       );
     }
@@ -1214,6 +1945,32 @@ export function SettingsRoute() {
           <div>Hermes 根目录：{healthQuery.data?.detected.hermesRoot ?? '未探测到'}</div>
           <div>API Server：{healthQuery.data?.detected.apiBaseUrl ?? '未探测到'}</div>
         </SettingsCard>
+
+        <SettingsCard title="Runtime Diagnostics" className="text-sm leading-6 lg:col-span-2">
+          {activeStoryline ? (
+            <div className="space-y-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge
+                  variant={runtimeStatusVariant(runtimeDiagnosticsQuery.data?.status)}
+                  className={runtimeStatusClassName(runtimeDiagnosticsQuery.data?.status)}
+                >
+                  {runtimeStatusLabel(runtimeDiagnosticsQuery.data?.status)}
+                </Badge>
+                <span className="font-medium text-foreground">{activeStoryline.title}</span>
+              </div>
+              <div className="text-muted-foreground">
+                {runtimeDiagnosticsQuery.data?.statusDetail ?? '当前 storyline 暂无最近一次后台派生记录。'}
+              </div>
+              <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                <span>可重试：{runtimeDiagnosticsQuery.data?.canRetry ? '是' : '否'}</span>
+                <span>world-state：{runtimeDiagnosticsQuery.data?.worldStateDebug?.processingPath ?? '无'}</span>
+                <span>memory writes：{runtimeDiagnosticsQuery.data?.productMemory?.writeResults.length ?? 0}</span>
+              </div>
+            </div>
+          ) : (
+            <div className="text-muted-foreground">当前没有 active storyline，可在聊天页触发一次派生后再查看 diagnostics。</div>
+          )}
+        </SettingsCard>
       </div>
     );
   })();
@@ -1231,39 +1988,35 @@ export function SettingsRoute() {
           }
         }}
         style={{
-          '--sidebar-width': '18.5rem',
+          '--sidebar-width': '19rem',
           '--sidebar-width-mobile': '19rem',
           '--settings-frame-gap-y': '0.875rem',
-          '--sidebar-top': 'calc(3.5rem + var(--settings-frame-gap-y))',
-          '--sidebar-bottom': 'var(--settings-frame-gap-y)',
           '--settings-surface-radius': '1.75rem',
           '--settings-inner-radius': '1.25rem',
         } as React.CSSProperties}
       >
-        <PageTitlebar
-          className="relative z-20 companion-chat-panel border-b-0"
-          title={
-            <div className="flex min-w-0 items-center gap-2">
-              <Button type="button" variant="ghost" size="icon" onClick={() => navigate('/')} className="size-8 rounded-full">
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-              <SidebarTrigger />
-              <h2 className="truncate text-base font-semibold tracking-tight">设置中心</h2>
-            </div>
-          }
-        />
+      <PageTitlebar
+        className="relative z-20 companion-chat-panel border-b-0"
+        title={
+          <div className="flex min-w-0 items-center gap-2">
+            <Button type="button" variant="ghost" size="icon" onClick={() => navigate('/')} className="size-8 rounded-full">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <SidebarTrigger />
+            <h2 className="truncate text-base font-semibold tracking-tight">设置中心</h2>
+          </div>
+        }
+      />
 
-        <div className="min-h-0 flex-1 px-4 lg:px-6">
-          <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl gap-4 py-[var(--settings-frame-gap-y)] xl:gap-6">
-            <Sidebar variant="floating" collapsible="icon" className="self-stretch">
-              <SettingsSidebarNav
-                activeSection={activeSection}
-                onSectionChange={setActiveSection}
-                selectedStorylineTitle={selectedStoryline?.title}
-              />
-            </Sidebar>
+      <div className="min-h-0 flex-1 px-4 lg:px-6">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-7xl gap-4 py-[var(--settings-frame-gap-y)] xl:gap-6">
+            <SettingsSidebarNav
+              activeSection={activeSection}
+              onSectionChange={setActiveSection}
+              selectedStorylineTitle={selectedStoryline?.title}
+            />
 
-            <SidebarInset className="min-h-0 overflow-hidden">
+            <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
               {operationError ? (
                 <div className={cn(SETTINGS_INNER_RADIUS, 'mb-4 border border-destructive/25 bg-destructive/10 px-3 py-2 text-sm text-destructive')}>
                   {operationError instanceof Error ? operationError.message : '设置操作失败。'}
@@ -1286,11 +2039,15 @@ export function SettingsRoute() {
                   </div>
                 </div>
 
-                <div ref={sectionScrollRef} onScroll={handleSectionScroll} className="min-h-0 flex-1 overflow-auto pr-1">
+                <div
+                  ref={sectionScrollRef}
+                  onScroll={handleSectionScroll}
+                  className={cn('min-h-0 flex-1 overflow-auto', showContentTopFade && 'settings-content-fade')}
+                >
                   <div ref={sectionHeroRef} className={cn('companion-glass mb-4 p-4 md:p-5', SETTINGS_SURFACE_RADIUS)}>
                     <div className="flex flex-wrap items-start justify-between gap-4">
                       <div>
-                        <div className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Workspace Settings</div>
+                        {/* <div className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">Workspace Settings</div> */}
                         <div className="mt-2 text-2xl font-semibold tracking-tight">{activeSectionMeta.label}</div>
                         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">{activeSectionMeta.description}</p>
                       </div>
@@ -1303,9 +2060,9 @@ export function SettingsRoute() {
                   {sectionContent}
                 </div>
               </div>
-            </SidebarInset>
-          </div>
+            </main>
         </div>
+      </div>
       </SidebarProvider>
 
       <Dialog open={Boolean(selectedMemory)} onOpenChange={(open) => {
@@ -1328,6 +2085,33 @@ export function SettingsRoute() {
                 onHide={(memory) => hideMemoryMutation.mutate(memory.id)}
                 onRestore={(memory) => restoreMemoryMutation.mutate(memory.id)}
                 actionPending={actionPending}
+              />
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(selectedActivityLog)} onOpenChange={(open) => {
+        if (!open) {
+          setSelectedActivityLogId(undefined);
+        }
+      }}>
+        <DialogContent className="max-h-[85vh] max-w-4xl overflow-hidden bg-card/95 backdrop-blur-2xl">
+          <DialogHeader>
+            <DialogTitle>ActivityLog 详情</DialogTitle>
+            <DialogDescription>ActivityLog 是记忆生成前的事件流水账；隐藏它不会删除 Hermes 原始聊天记录。</DialogDescription>
+          </DialogHeader>
+          <div className="overflow-auto pr-1">
+            {selectedActivityLog ? (
+              <ActivityLogDetail
+                activityLog={selectedActivityLog}
+                memories={memories}
+                onOpenMemory={(memoryId) => {
+                  setSelectedActivityLogId(undefined);
+                  setSelectedMemoryId(memoryId);
+                }}
+                onHide={(activityLog) => hideActivityLogMutation.mutate(activityLog.id)}
+                actionPending={hideActivityLogMutation.isPending}
               />
             ) : null}
           </div>

@@ -1,7 +1,16 @@
 import crypto from 'node:crypto';
-import type { MemoryRecord, SceneProjection, Storyline, WorldStateUpdateCandidate } from '@bubble-town/shared';
+import type {
+  MemoryRecord,
+  SceneProjection,
+  SemanticEvent,
+  SemanticStability,
+  SemanticTemporalScope,
+  Storyline,
+  WorldStateUpdateCandidate,
+} from '@bubble-town/shared';
 import {
   getStoryRuntimeRepository,
+  selectAllActivityLogs,
   selectAllMemoryRecords,
   selectStorylineById,
 } from '../../runtime/story-runtime-repository.js';
@@ -29,7 +38,7 @@ export function normalizeObjectLabel(value: string): string | undefined {
   const normalized = normalizeWorldStateText(
     value.replace(/^(我把|把|我将|我把那|我把这|我把那个|我把这个|那|这|那个|这个|一盏|一扇|一只|一件|一张|一把|我的)/, ''),
   );
-  if (!normalized || /^(它|它们|东西|那个|这个|那里|这里)$/.test(normalized)) {
+  if (!normalized || /^(它|它们|东西|那个|这个|那里|这里|object|objects|item|items|thing|things|something|物品|某物|该物|此物)$/i.test(normalized)) {
     return undefined;
   }
   return normalized;
@@ -63,6 +72,23 @@ export function buildLocationContent(objectLabel: string, locationText: string):
   return `${objectLabel}现在放在${locationText}。`;
 }
 
+function isStableWorldStateCandidate(input: {
+  isCurrentStableState: boolean;
+  temporalScope?: SemanticTemporalScope;
+  stability?: SemanticStability;
+}): boolean {
+  if (!input.isCurrentStableState) {
+    return false;
+  }
+  if (input.stability && input.stability !== 'stable') {
+    return false;
+  }
+  if (input.temporalScope && !['stable', 'recurring', 'session'].includes(input.temporalScope)) {
+    return false;
+  }
+  return true;
+}
+
 export function buildWorldStateContent(input: {
   objectLabel: string;
   stateKind: 'status' | 'location';
@@ -75,6 +101,41 @@ export function buildWorldStateContent(input: {
   return buildStateContent(input.objectLabel, input.state);
 }
 
+function buildWorldStateSemanticEvent(input: {
+  candidate: WorldStateUpdateCandidate;
+  happenedAt?: string;
+}): SemanticEvent {
+  return {
+    id: `semantic_event_${crypto.randomUUID()}`,
+    eventType: 'world_state_change',
+    entities: [
+      {
+        label: input.candidate.objectLabel,
+        type: 'object',
+        role: 'object',
+        confidence: input.candidate.confidence,
+      },
+      ...(input.candidate.locationText ? [{
+        label: input.candidate.locationText,
+        type: 'place' as const,
+        role: 'location' as const,
+        confidence: input.candidate.confidence,
+      }] : []),
+    ],
+    stateChange: {
+      property: input.candidate.stateKind,
+      to: input.candidate.locationText ?? input.candidate.state,
+    },
+    temporalScope: input.candidate.temporalScope ?? 'stable',
+    stability: input.candidate.stability ?? 'stable',
+    stabilityReason: input.candidate.stabilityReason,
+    evidenceSpan: input.candidate.sourceSpan ?? input.candidate.reason,
+    confidence: input.candidate.confidence,
+    sourceMessageIds: input.candidate.sourceMessageIds,
+    happenedAt: input.happenedAt,
+  };
+}
+
 export function createWorldStateUpdateCandidate(input: {
   sceneId?: string;
   objectLabel: string;
@@ -84,10 +145,15 @@ export function createWorldStateUpdateCandidate(input: {
   actionType: 'place' | 'move' | 'open' | 'close' | 'break' | 'repair' | 'unknown';
   sourceSpan?: string;
   isCurrentStableState: boolean;
+  temporalScope?: SemanticTemporalScope;
+  stability?: SemanticStability;
+  stabilityReason?: string;
   reason: string;
   confidence: number;
   sourceMessageIds?: string[];
   sourceActivityIds?: string[];
+  sourceHappenedAtStart?: string;
+  sourceHappenedAtEnd?: string;
 }): WorldStateUpdateCandidate | undefined {
   const sceneId = normalizeSceneId(input.sceneId);
   const objectLabel = normalizeObjectLabel(input.objectLabel);
@@ -95,6 +161,9 @@ export function createWorldStateUpdateCandidate(input: {
   const state = normalizeWorldStateText(input.state);
   const locationText = input.locationText ? normalizeWorldStateText(input.locationText) : undefined;
   if (!objectLabel || !state || (stateKind === 'location' && !locationText)) {
+    return undefined;
+  }
+  if (!isStableWorldStateCandidate(input)) {
     return undefined;
   }
 
@@ -107,10 +176,15 @@ export function createWorldStateUpdateCandidate(input: {
     actionType: input.actionType,
     sourceSpan: input.sourceSpan ? normalizeWorldStateText(input.sourceSpan) : undefined,
     isCurrentStableState: input.isCurrentStableState,
+    temporalScope: input.temporalScope,
+    stability: input.stability,
+    stabilityReason: input.stabilityReason,
     reason: input.reason,
     confidence: Math.max(0, Math.min(1, input.confidence)),
     sourceMessageIds: input.sourceMessageIds,
     sourceActivityIds: input.sourceActivityIds,
+    sourceHappenedAtStart: input.sourceHappenedAtStart,
+    sourceHappenedAtEnd: input.sourceHappenedAtEnd,
   };
 }
 
@@ -189,7 +263,7 @@ export function applyWorldStateUpdateCandidate(input: {
     state,
     locationText,
   });
-  if (!objectLabel || !objectId || !state || !input.candidate.isCurrentStableState || (stateKind === 'location' && !locationText)) {
+  if (!objectLabel || !objectId || !state || !isStableWorldStateCandidate(input.candidate) || (stateKind === 'location' && !locationText)) {
     throw new Error('world state candidate 缺少必要字段。');
   }
 
@@ -215,6 +289,15 @@ export function applyWorldStateUpdateCandidate(input: {
   }
 
   const version = historicalStates.reduce((max, memory) => Math.max(max, memory.worldState?.version ?? 0), 0) + 1;
+  const sourceActivityIds = input.candidate.sourceActivityIds;
+  const sourceActivityTimes = sourceActivityIds
+    ? selectAllActivityLogs(snapshot, input.storylineId)
+      .filter((entry) => sourceActivityIds.includes(entry.id))
+      .map((entry) => entry.happenedAt)
+      .sort()
+    : [];
+  const sourceHappenedAtStart = input.candidate.sourceHappenedAtStart ?? sourceActivityTimes[0];
+  const sourceHappenedAtEnd = input.candidate.sourceHappenedAtEnd ?? sourceActivityTimes[sourceActivityTimes.length - 1];
   const created = createMemoryRecord(input.storylineId, {
     content,
     scope: 'story',
@@ -225,7 +308,15 @@ export function applyWorldStateUpdateCandidate(input: {
     importance: 0.9,
     confidence: input.candidate.confidence,
     sourceMessageIds: input.candidate.sourceMessageIds,
-    sourceActivityIds: input.candidate.sourceActivityIds,
+    sourceActivityIds,
+    sourceHappenedAtStart,
+    sourceHappenedAtEnd,
+    semanticEvents: [buildWorldStateSemanticEvent({
+      candidate: input.candidate,
+      happenedAt: sourceHappenedAtEnd ?? sourceHappenedAtStart,
+    })],
+    semanticSchemaVersion: 1,
+    semanticSource: 'structured',
     supersedes: activeStates.map((memory) => memory.id),
     worldState: {
       sceneId,

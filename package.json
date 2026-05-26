@@ -3,7 +3,10 @@
   "private": true,
   "version": "1.0.5",
   "type": "module",
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "concurrently -n web,backend -c cyan,magenta \"npm run dev:web\" \"npm run dev:backend\"",
     "dev:lan": "concurrently -n web,backend -c cyan,magenta \"npm run dev:web:lan\" \"npm run dev:backend:lan\"",
@@ -19,9 +22,11 @@
     "package:desktop": "npm run build --workspaces --if-present && npm run package -w @bubble-town/desktop",
     "release:desktop": "node scripts/release-desktop.mjs",
     "release:desktop:dry-run": "node scripts/release-desktop.mjs --dry-run",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "test:2.2.3": "npm run test:2.2.3 -w @bubble-town/companion"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
-  }
+  },
+  "packageManager": "pnpm@10.27.0"
 }

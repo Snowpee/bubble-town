@@ -278,7 +278,7 @@
     border-radius: inherit;
     box-shadow:
       -2rem -2rem 6rem 0rem color-mix(in oklab, var(--primary) 25%, transparent),
-      2rem -2rem 6rem 0rem color-mix(in oklab, var(--story-composer-shadow-secondary) 80%, transparent),
+      2rem -2rem 6rem 0rem color-mix(in oklab, var(--story-composer-shadow-secondary) 20%, transparent),
       0 2rem 6rem 0rem color-mix(in oklab, var(--primary) 30%, transparent);
     opacity: 0.9;
     transform: translate3d(0, 0, 0);
@@ -325,6 +325,15 @@
   .story-history-preview::-webkit-scrollbar-thumb {
     border-radius: 9999px;
     background: color-mix(in oklab, var(--primary) 24%, transparent);
+  }
+
+  .settings-content-fade {
+    mask-image: linear-gradient(to bottom, transparent 0%, rgba(0, 0, 0, 0.08) 1.25rem, rgba(0, 0, 0, 0.45) 2.5rem, black 4.25rem, black 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, rgba(0, 0, 0, 0.08) 1.25rem, rgba(0, 0, 0, 0.45) 2.5rem, black 4.25rem, black 100%);
+    mask-size: 100% 100%;
+    -webkit-mask-size: 100% 100%;
+    mask-repeat: no-repeat;
+    -webkit-mask-repeat: no-repeat;
   }
 
   .story-continue-composer {
@@ -427,7 +436,6 @@
     -webkit-app-region: no-drag;
   }
 }
-
 
 @layer components {
   .companion-page {

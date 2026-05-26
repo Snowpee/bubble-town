@@ -36,6 +36,23 @@ function isWithinRange(value: string | undefined, range?: [string, string]): boo
   return !Number.isNaN(time) && time >= new Date(range[0]).getTime() && time < new Date(range[1]).getTime();
 }
 
+function memoryMatchesRange(memory: MemoryRecord, range?: [string, string]): boolean {
+  if (!range) {
+    return false;
+  }
+  if (memory.sourceHappenedAtStart || memory.sourceHappenedAtEnd) {
+    const startValue = memory.sourceHappenedAtStart ?? memory.sourceHappenedAtEnd;
+    const endValue = memory.sourceHappenedAtEnd ?? memory.sourceHappenedAtStart;
+    const start = new Date(startValue!).getTime();
+    const end = new Date(endValue!).getTime();
+    if (Number.isNaN(start) || Number.isNaN(end)) {
+      return false;
+    }
+    return end >= new Date(range[0]).getTime() && start < new Date(range[1]).getTime();
+  }
+  return isWithinRange(memory.updatedAt, range) || isWithinRange(memory.createdAt, range);
+}
+
 function matchesQuery(value: string, input: string): boolean {
   const normalizedValue = normalizeText(value);
   const keywords = removeRecallQueryFillerTerms(normalizeText(input))
@@ -116,7 +133,7 @@ export function searchRelativeTimeInRuntimeContext(
       .slice(0, 8);
     const memories = runtimeContext.allMemoryRecords
       .filter((memory) => memory.status === 'active')
-      .filter((memory) => isWithinRange(memory.updatedAt, range) || isWithinRange(memory.createdAt, range))
+      .filter((memory) => memoryMatchesRange(memory, range))
       .filter((memory) => !matchesSuppressionText(memory.content, suppressedMemories))
       .slice(0, 8);
     const messages = filterMessages(sessionMessages, input, range, suppressedMemories);

@@ -29,6 +29,47 @@ export type SuppressedMemoryStatus = 'active' | 'deleted';
 export type ContinuityMode = 'live' | 'same_day' | 'new_day' | 'long_gap';
 export type WorldStateKind = 'status' | 'location';
 export type WorldStateActionType = 'place' | 'move' | 'open' | 'close' | 'break' | 'repair' | 'unknown';
+export type SemanticEventType =
+  | 'preference'
+  | 'commitment'
+  | 'relationship_change'
+  | 'world_state_change'
+  | 'story_event'
+  | 'correction'
+  | 'unknown';
+export type SemanticEntityType = 'person' | 'object' | 'place' | 'concept' | 'unknown';
+export type SemanticEntityRole = 'subject' | 'object' | 'location' | 'target' | 'context';
+export type SemanticTemporalScope = 'instantaneous' | 'session' | 'stable' | 'recurring' | 'historical' | 'unknown';
+export type SemanticStability = 'transient' | 'stable' | 'uncertain' | 'unknown';
+
+export interface SemanticEntity {
+  id?: string;
+  label: string;
+  type: SemanticEntityType;
+  role: SemanticEntityRole;
+  confidence?: number;
+}
+
+export interface SemanticStateChange {
+  targetEntityRef?: string;
+  property: string;
+  from?: string;
+  to?: string;
+}
+
+export interface SemanticEvent {
+  id: string;
+  eventType: SemanticEventType;
+  entities?: SemanticEntity[];
+  stateChange?: SemanticStateChange;
+  temporalScope: SemanticTemporalScope;
+  stability: SemanticStability;
+  stabilityReason?: string;
+  evidenceSpan: string;
+  confidence: number;
+  sourceMessageIds?: string[];
+  happenedAt?: string;
+}
 
 export interface WorldStateMetadata {
   sceneId: string;
@@ -65,10 +106,15 @@ export interface WorldStateUpdateCandidate {
   actionType: WorldStateActionType;
   sourceSpan?: string;
   isCurrentStableState: boolean;
+  temporalScope?: SemanticTemporalScope;
+  stability?: SemanticStability;
+  stabilityReason?: string;
   reason: string;
   confidence: number;
   sourceMessageIds?: string[];
   sourceActivityIds?: string[];
+  sourceHappenedAtStart?: string;
+  sourceHappenedAtEnd?: string;
 }
 
 export interface WorldStateDebugApplyResult {
@@ -113,6 +159,7 @@ export interface WorldStateDebugTrace {
   userInput: string;
   assistantOutput: string;
   sourceMessageIds?: string[];
+  recentActivityLogs?: Pick<ActivityLog, 'id' | 'happenedAt' | 'summary'>[];
   processingStatus: WorldStateProcessingStatus;
   processingPath?: WorldStateProcessingPath;
   executionMode?: WorldStateExecutionMode;
@@ -201,6 +248,11 @@ export interface MemoryRecord {
   supersedes?: string[];
   supersededBy?: string;
   sourceActivityIds?: string[];
+  sourceHappenedAtStart?: string;
+  sourceHappenedAtEnd?: string;
+  semanticEvents?: SemanticEvent[];
+  semanticSchemaVersion?: number;
+  semanticSource?: 'structured' | 'legacy';
   lastAccessedAt?: string;
   accessCount?: number;
   expiresAt?: string;
@@ -235,8 +287,82 @@ export interface MemoryCandidate {
   reason: string;
   shouldPersist: boolean;
   sourceMessageIds?: string[];
+  supersedes?: string[];
   worldState?: WorldStateMetadata;
   sourceActivityIds?: string[];
+  sourceHappenedAtStart?: string;
+  sourceHappenedAtEnd?: string;
+  semanticEvents?: SemanticEvent[];
+  semanticSchemaVersion?: number;
+  semanticSource?: 'structured' | 'legacy';
+  confirmationRequired?: boolean;
+  confirmationPrompt?: string;
+}
+
+export type ProductMemoryWriteOutcome =
+  | 'created'
+  | 'existing'
+  | 'pending_confirmation'
+  | 'skipped'
+  | 'rejected'
+  | 'error';
+
+export interface ProductMemoryWriteResult {
+  outcome: ProductMemoryWriteOutcome;
+  candidate: MemoryCandidate;
+  memoryId?: string;
+  existingMemoryId?: string;
+  pendingFrameId?: string;
+  reason?: string;
+  error?: string;
+}
+
+export type RuntimeDiagnosticsStatus = 'processing' | 'updated' | 'failed' | 'skipped' | 'uncertain';
+
+export interface ProductMemoryDiagnosticsEntry {
+  outcome: ProductMemoryWriteOutcome;
+  kind: MemoryKind;
+  content: string;
+  memoryId?: string;
+  existingMemoryId?: string;
+  pendingFrameId?: string;
+  reason?: string;
+  error?: string;
+}
+
+export interface ProductMemoryDiagnosticsSnapshot {
+  storylineId: string;
+  userInput: string;
+  assistantOutput: string;
+  writeResults: ProductMemoryDiagnosticsEntry[];
+  pendingSemanticFrames: PendingSemanticFrame[];
+  resolvedPendingSemanticFrame?: PendingSemanticFrame;
+  lastUpdatedAt: string;
+}
+
+export type PendingSemanticFrameKind =
+  | 'preference_confirm'
+  | 'commitment_confirm'
+  | 'relationship_confirm';
+
+export type PendingSemanticFrameStatus = 'pending' | 'resolved' | 'cancelled';
+
+export interface PendingSemanticFrame {
+  id: string;
+  storylineId: string;
+  kind: PendingSemanticFrameKind;
+  candidate: MemoryCandidate;
+  prompt: string;
+  status: PendingSemanticFrameStatus;
+  createdAt: string;
+  updatedAt: string;
+  sourceMessageIds?: string[];
+  resolvedByMessageIds?: string[];
+  lastUserReply?: string;
+}
+
+export interface PendingSemanticFramesResponse {
+  pendingSemanticFrames: PendingSemanticFrame[];
 }
 
 export interface MemoryRetrievalMetadata {
@@ -271,6 +397,9 @@ export interface ActivityLog {
   tags: string[];
   status: RuntimeRecordStatus;
   sourceMessageIds?: string[];
+  semanticEvents?: SemanticEvent[];
+  semanticSchemaVersion?: number;
+  semanticSource?: 'structured' | 'legacy';
   embeddingRef?: string;
   embeddingModel?: string;
   embeddingText?: string;
@@ -339,6 +468,7 @@ export interface ContextPack {
   activityLogs: ActivityLog[];
   continuityHints: ContinuityHint[];
   relativeTimeResults: RelativeTimeSearchResult[];
+  pendingSemanticFrames?: PendingSemanticFrame[];
   sceneProjection?: SceneProjection;
   systemInstructions: string[];
 }
@@ -420,6 +550,24 @@ export interface ContextPreviewResponse {
   worldStateDebug?: WorldStateDebugTrace;
 }
 
+export interface WorldStateDebugSnapshotResponse {
+  storylineId: string;
+  sceneProjection?: SceneProjection;
+  worldStateDebug?: WorldStateDebugTrace;
+}
+
+export interface RuntimeDiagnosticsSnapshotResponse {
+  storylineId: string;
+  status: RuntimeDiagnosticsStatus;
+  statusDetail?: string;
+  canRetry: boolean;
+  retryDisabledReason?: string;
+  sceneProjection?: SceneProjection;
+  worldStateDebug?: WorldStateDebugTrace;
+  productMemory?: ProductMemoryDiagnosticsSnapshot;
+  lastUpdatedAt?: string;
+}
+
 export interface RelativeTimeSearchRequest {
   input: string;
 }
@@ -442,6 +590,17 @@ export interface MemoriesResponse {
   memories: MemoryRecord[];
 }
 
+export type BatchMemoryAction = 'hide' | 'restore' | 'delete';
+
+export interface BatchMemoryRequest {
+  memoryIds: string[];
+  action: BatchMemoryAction;
+}
+
+export interface BatchMemoryResponse {
+  memories: MemoryRecord[];
+}
+
 export interface CreateMemoryRequest {
   content: string;
   scope?: MemoryScope;
@@ -455,6 +614,11 @@ export interface CreateMemoryRequest {
   supersedes?: string[];
   supersededBy?: string;
   sourceActivityIds?: string[];
+  sourceHappenedAtStart?: string;
+  sourceHappenedAtEnd?: string;
+  semanticEvents?: SemanticEvent[];
+  semanticSchemaVersion?: number;
+  semanticSource?: 'structured' | 'legacy';
   lastAccessedAt?: string;
   accessCount?: number;
   expiresAt?: string;
@@ -479,6 +643,11 @@ export interface UpdateMemoryRequest {
   supersedes?: string[];
   supersededBy?: string;
   sourceActivityIds?: string[];
+  sourceHappenedAtStart?: string;
+  sourceHappenedAtEnd?: string;
+  semanticEvents?: SemanticEvent[];
+  semanticSchemaVersion?: number;
+  semanticSource?: 'structured' | 'legacy';
   lastAccessedAt?: string;
   accessCount?: number;
   expiresAt?: string;
@@ -525,6 +694,9 @@ export interface CreateActivityLogRequest {
   summary: string;
   tags?: string[];
   sourceMessageIds?: string[];
+  semanticEvents?: SemanticEvent[];
+  semanticSchemaVersion?: number;
+  semanticSource?: 'structured' | 'legacy';
   embeddingRef?: string;
   embeddingModel?: string;
   embeddingText?: string;
@@ -538,6 +710,9 @@ export interface UpdateActivityLogRequest {
   tags?: string[];
   status?: RuntimeRecordStatus;
   sourceMessageIds?: string[];
+  semanticEvents?: SemanticEvent[];
+  semanticSchemaVersion?: number;
+  semanticSource?: 'structured' | 'legacy';
   embeddingRef?: string;
   embeddingModel?: string;
   embeddingText?: string;

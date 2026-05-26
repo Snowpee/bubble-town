@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildContextPack } from '../story/context-pack.js';
+import { recordStorylineTurnContinuity } from '../story/story-memory-continuity.js';
 import { consolidateStorylineMemory, correctMemory } from './memory-governance.js';
 import {
   createActivityLog,
@@ -120,6 +121,39 @@ test('memory governance 用户纠正旧记忆后旧记录不再进入 ContextPac
     assert.equal(correction.superseded.status, 'hidden');
     assert.equal(correction.superseded.supersededBy, correction.replacement.id);
     assert.deepEqual(contextPack.memories.map((memory) => memory.content), ['用户现在更喜欢茶。']);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('人工纠正后的记忆不会被自动 pipeline 立即覆盖回旧内容', async () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const storyline = createTestStoryline();
+    const oldMemory = createMemoryRecord(storyline.id, {
+      content: '用户喜欢手冲咖啡。',
+      kind: 'preference',
+      importance: 0.7,
+      confidence: 0.7,
+    });
+
+    correctMemory({
+      memoryId: oldMemory.id,
+      content: '用户现在更喜欢茶。',
+      reason: '用户明确纠正旧偏好。',
+    });
+
+    await recordStorylineTurnContinuity({
+      storyline,
+      userInput: '我喜欢手冲咖啡。',
+      assistantOutput: '收到，我先按你刚刚的话理解。',
+      sourceMessageIds: ['session-1', 'resp-1'],
+    });
+
+    const activePreferences = listAllMemoryRecords(storyline.id)
+      .filter((memory) => memory.kind === 'preference' && memory.status === 'active' && !memory.supersededBy);
+    assert.deepEqual(activePreferences.map((memory) => memory.content), ['用户现在更喜欢茶。']);
   } finally {
     cleanupHermesHome(hermesHome);
   }

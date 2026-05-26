@@ -259,6 +259,7 @@ test('reset profile for storyline 会清理 runtime 数据和 Hermes 目录，�
       removedMemoryCount: 0,
       removedSuppressedMemoryCount: 0,
       removedActivityLogCount: 0,
+      removedPendingSemanticFrameCount: 0,
       removedCharacterCount: 0,
     });
   } finally {

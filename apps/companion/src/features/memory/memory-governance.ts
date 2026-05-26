@@ -4,28 +4,18 @@ import {
   getStorylineRuntimeContext,
 } from '../../services/runtime-service.js';
 import {
-  createMemoryRecord,
   updateActivityLog,
   updateMemoryRecord,
 } from '../../store/story-runtime-store.js';
+import {
+  canonicalMemoryContent,
+  createManualMemory,
+  createStoryFactCandidateFromActivityLogs,
+  persistMemoryCandidate,
+} from './memory-write-service.js';
 
-const CONSOLIDATED_TAG = 'consolidated';
-
-function compact(value: string, maxLength = 360): string {
-  const trimmed = value.replace(/\s+/g, ' ').trim();
-  if (trimmed.length <= maxLength) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, maxLength - 1)}...`;
-}
-
-function canonicalMemoryContent(value: string): string {
-  return value
-    .replace(/^(用户偏好|用户边界或负向偏好|用户身份或稳定事实|用户明确提出需要记住或延续的约定|阶段摘要)：/, '')
-    .replace(/[，。！？、；：“”"'`~!@#$%^&*()[\]{}<>|\\/_+=,.?:;-]/g, '')
-    .replace(/\s+/g, '')
-    .toLowerCase();
-}
+export const CONSOLIDATED_TAG = 'consolidated';
+export const AUTO_CONSOLIDATION_ELIGIBLE_TAG = 'memory-solidification-v2';
 
 function chooseDuplicateKeeper(memories: MemoryRecord[]): MemoryRecord {
   return [...memories].sort((left, right) => {
@@ -47,24 +37,20 @@ function unconsolidatedActivityLogs(activityLogs: ActivityLog[], limit: number):
 }
 
 function createSummaryMemory(storylineId: string, activityLogs: ActivityLog[]): MemoryRecord | undefined {
-  if (activityLogs.length < 3) {
+  const candidate = createStoryFactCandidateFromActivityLogs(activityLogs);
+  if (!candidate) {
     return undefined;
   }
-
-  const summary = compact(activityLogs.map((entry) => entry.summary).join(' '));
-  const memory = createMemoryRecord(storylineId, {
-    content: `阶段摘要：${summary}`,
-    scope: 'activity',
-    source: 'summary',
-    kind: 'story_fact',
-    lifespan: 'episodic',
-    importance: 0.56,
-    confidence: 0.68,
-    reason: `由 ${activityLogs.length} 条 ActivityLog 巩固生成，保留来源 ActivityLog 引用。`,
-    sourceActivityIds: activityLogs.map((entry) => entry.id),
+  const result = persistMemoryCandidate({
+    storylineId,
+    candidate,
+    allowPendingConfirmation: false,
   });
-
-  return memory;
+  if (result.outcome !== 'created' || !result.memoryId) {
+    return undefined;
+  }
+  const runtimeContext = getStorylineRuntimeContext(storylineId);
+  return runtimeContext?.allMemoryRecords.find((memory) => memory.id === result.memoryId);
 }
 
 function mergeDuplicateMemories(memories: MemoryRecord[]): Pick<MemoryConsolidationResult, 'duplicateKeepers' | 'hiddenDuplicates'> {
@@ -152,7 +138,7 @@ export function correctMemory(input: {
     throw new Error('未找到可纠正的记忆。');
   }
 
-  const replacement = createMemoryRecord(existing.storylineId, {
+  const replacement = createManualMemory(existing.storylineId, {
     content: input.content,
     scope: existing.scope,
     source: 'manual',

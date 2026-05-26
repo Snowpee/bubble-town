@@ -114,6 +114,20 @@ function describeElapsedSince(value?: string, now = new Date()): string | undefi
   return `${Math.floor(hours / 24)} 天`;
 }
 
+function isTemporalGroundingQuery(input?: string): boolean {
+  const normalized = input?.replace(/\s+/g, '') ?? '';
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    /什么时候|几点|哪天|何时|何时说|是什么时候|啥时候/.test(normalized)
+    || /昨天还是今天|今天还是昨天|昨晚还是今天|今天下午还是昨天/.test(normalized)
+    || /再想想.*时候|再想想.*时间|你再想想/.test(normalized)
+    || /刚才|刚刚|之前|当时/.test(normalized)
+  );
+}
+
 function resolveContinuityMode(lastInteractionAt?: string, now = new Date()): ContinuityMode {
   if (!lastInteractionAt) {
     return 'live';
@@ -180,13 +194,27 @@ export function buildTimeContext(lastInteractionAt?: string, timezone = Intl.Dat
   };
 }
 
-function buildContinuityHints(context: Pick<ContextPack, 'continuityMode' | 'time' | 'relativeTimeResults'>) {
+function buildContinuityHints(context: Pick<ContextPack, 'continuityMode' | 'time' | 'relativeTimeResults'> & { input?: string }) {
   const hints: ContinuityHint[] = [{
     kind: context.continuityMode,
     message: context.time.elapsedSinceLastInteraction
       ? `当前本地时间是 ${context.time.localNow}（${context.time.timezone}）；距离上次互动约 ${context.time.elapsedSinceLastInteraction}。请自然续接，不要表现为第一次见面。`
       : `当前本地时间是 ${context.time.localNow}（${context.time.timezone}）。这是当前 Storyline 的连续对话。请自然进入角色，不要解释系统上下文。`,
   }];
+
+  if (context.continuityMode === 'new_day' || context.continuityMode === 'long_gap') {
+    hints.push({
+      kind: context.continuityMode,
+      message: '跨天后，历史消息里提到的天气、昼夜、位置、正在做的事、手上物品或设备状态，只能视为当时成立；除非本轮再次确认，否则不要默认延续到现在。',
+    });
+  }
+
+  if (isTemporalGroundingQuery(context.input)) {
+    hints.push({
+      kind: 'relative_time_hit',
+      message: '如果用户追问某件事是什么时候发生的、昨天还是今天，优先依据 activityLogs、recentMessages 和 sessionAnchors 里的时间戳还原事件顺序；sceneProjection 只表示最后确认的稳定状态，不能替代事件时间线。',
+    });
+  }
 
   for (const result of context.relativeTimeResults) {
     hints.push({
@@ -255,9 +283,10 @@ export function buildContextPackFromRuntimeContext(
     topicShiftCommentAllowed: conversationPacingState.topicShiftCommentAllowed,
     topicShiftCommentWindowMinutes: conversationPacingState.policy.topicShiftCommentWindowMinutes,
   };
-  const continuityHints = buildContinuityHints({ continuityMode, time, relativeTimeResults });
+  const continuityHints = buildContinuityHints({ continuityMode, time, relativeTimeResults, input: options.input });
   const activeMemories = runtimeContext.activeMemories
     .filter((memory) => memory.kind !== 'world_object_state');
+  const pendingSemanticFrames = runtimeContext.pendingSemanticFrames.slice(0, 1);
   const semanticScores = options.input?.trim()
     ? (() => {
         try {
@@ -299,17 +328,23 @@ export function buildContextPackFromRuntimeContext(
     activityLogs: filterSuppressedActivityLogs(runtimeContext.activityLogs, suppressedMemories),
     continuityHints,
     relativeTimeResults,
+    pendingSemanticFrames,
     sceneProjection,
     systemInstructions: [
       '你正在扮演一个长期陪伴型角色。请自然续接当前 Timeline，不要用系统记录口吻解释上下文。',
       '只使用当前 ContextPack 中的剧情记忆和活动记录；不要主动引入其它剧情的信息。',
-      'sceneProjection 表示当前场景中稳定成立的重要物品状态；它比普通语义召回更可靠，但不要把它当成数据库字段逐项复述给用户。',
+      'sceneProjection 只表示当前场景里最后确认且仍稳定成立的重要物品状态；它不能替代 activity timeline，也不能直接回答“事情是什么时候发生的”。',
       'suppressedMemories 表示用户不希望主动展开的边界；相关内容已在注入前过滤，不要主动猜测、追问或展开被过滤主题。',
       'ContextPack 中的 now、localNow、localTime、timezone 和相对时间范围是 authoritative_time，优先于 Conversation started、历史消息中的时间说法和之前的 terminal date 工具结果。',
       '之前轮次的 terminal date 输出只代表当时的工具结果；每一轮回答当前时间、昼夜、早晚、是否该睡觉时，都必须重新以本轮 ContextPack 的 localNow/localTime 为准。',
+      '如果历史消息与当前权威时间存在跨天或明显时间间隔，天气、昼夜、位置、正在进行中的动作、随身物品和设备状态等短时现场事实不能默认延续到现在；只能说那是当时发生的情况。',
+      '当用户追问“什么时候”“昨天还是今天”“刚才哪一轮说的”时，优先根据 activityLogs、recentMessages、sessionAnchors 的时间戳还原事件顺序；不要用 sceneProjection 替代事件时间线。',
       '使用检索到的记忆时，不要解释来源；如果 relativeTimeResults 未命中，不要编造具体过去事件。',
       'sessionAnchors 描述当前 Hermes session 的边界消息；用户询问当前对话的开场、最近发言或回顾顺序时，优先使用这些锚点。',
       'memories 已按相关性、重要性、置信度、新鲜度和 suppressedMemories 预算筛选；active 不代表每轮都必须提及。',
+      pendingSemanticFrames.length > 0
+        ? `pendingSemanticFrames 表示当前存在待确认的跨轮语义；优先围绕它做简短确认或承接，不要忽略用户刚刚给出的短回答。最新待确认项：${pendingSemanticFrames[0]!.prompt}`
+        : '当前没有待确认的跨轮语义；不要凭空假设用户在确认上一轮未出现的事项。',
       conversationPacing.topicShiftCommentAllowed
         ? '用户在短间隔内切换话题时，可以轻描淡写地承接；但只有在确实有助于氛围时才评论话题变化。'
         : '用户在较长间隔后发送新问题时，将其视为自然开启的新话题；不要评论“话题突然”“怎么突然问这个”或追问为什么换话题，直接回答当前问题。',
@@ -326,8 +361,12 @@ export function buildContextPack(storylineId: string, options: { input?: string 
 }
 
 export function renderContextPackInstructions(contextPack: ContextPack): string {
+  const renderMessage = (message: ChatMessage) => {
+    const local = formatLocalDateTime(new Date(message.createdAt), contextPack.time.timezone).localNow;
+    return `[local ${local} ${contextPack.time.timezone}; utc ${message.createdAt}] [${message.role}] ${message.content}`;
+  };
   const renderAnchor = (label: string, message?: ChatMessage) => (
-    message ? `- ${label}: [${message.role}] ${message.content}` : `- ${label}: 无`
+    message ? `- ${label}: ${renderMessage(message)}` : `- ${label}: 无`
   );
   const memories = contextPack.memories.map((memory) => `- [${memory.scope}] ${memory.content}`).join('\n') || '- 无';
   const suppressed = contextPack.suppressedMemories.map((memory, index) => (
@@ -339,18 +378,27 @@ export function renderContextPackInstructions(contextPack: ContextPack): string 
     const local = formatLocalDateTime(new Date(entry.happenedAt), contextPack.time.timezone).localNow;
     return `- [local ${local} ${contextPack.time.timezone}; utc ${entry.happenedAt}] ${entry.summary}`;
   }).join('\n') || '- 无';
-  const recent = contextPack.recentMessages.map((message) => `- ${message.role}: ${message.content}`).join('\n') || '- 无';
+  const recent = contextPack.recentMessages.map((message) => `- ${renderMessage(message)}`).join('\n') || '- 无';
   const hints = contextPack.continuityHints.map((hint) => `- [${hint.kind}] ${hint.message}`).join('\n') || '- 无';
   const sceneProjection = contextPack.sceneProjection
     ? `- ${contextPack.sceneProjection.summary}`
     : '- 无';
   const relative = contextPack.relativeTimeResults.map((result) => {
-    const activities = result.activityLogs.map((entry) => `[activity] ${entry.summary}`).join('；');
+    const activities = result.activityLogs.map((entry) => {
+      const local = formatLocalDateTime(new Date(entry.happenedAt), contextPack.time.timezone).localNow;
+      return `[activity @ local ${local}; utc ${entry.happenedAt}] ${entry.summary}`;
+    }).join('；');
     const memories = result.memories.map((memory) => `[memory] ${memory.content}`).join('；');
-    const messages = result.messages.map((message) => `[${message.role}] ${message.content}`).join('；');
+    const messages = result.messages.map((message) => {
+      const local = formatLocalDateTime(new Date(message.createdAt), contextPack.time.timezone).localNow;
+      return `[message @ local ${local}; utc ${message.createdAt}] [${message.role}] ${message.content}`;
+    }).join('；');
     const content = [activities, memories, messages].filter(Boolean).join('；') || '未命中';
     return `- ${result.label}: ${content}`;
   }).join('\n') || '- 无';
+  const pending = contextPack.pendingSemanticFrames?.map((frame) => (
+    `- [${frame.kind}] ${frame.prompt}`
+  )).join('\n') || '- 无';
 
   return [
     '<BubbleTownContextPack>',
@@ -374,6 +422,8 @@ export function renderContextPackInstructions(contextPack: ContextPack): string 
     ...contextPack.systemInstructions.map((instruction) => `- ${instruction}`),
     'continuityHints:',
     hints,
+    'pendingSemanticFrames:',
+    pending,
     'sceneProjection:',
     sceneProjection,
     'sessionAnchors:',

@@ -1,13 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ActiveStorylineResponse, ChatMessage as ChatMessageType, ContextPreviewResponse } from '@bubble-town/shared';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ArrowUp, Maximize2, Square } from 'lucide-react';
+import type {
+  ActiveStorylineResponse,
+  ChatMessage as ChatMessageType,
+  ContextPreviewResponse,
+  RuntimeDiagnosticsSnapshotResponse,
+} from '@bubble-town/shared';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { AlertCircle, ArrowLeft, ArrowUp, CheckCircle2, LoaderCircle, Maximize2, RotateCcw, Search, Square } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { ChatMessage } from '@/components/hermes/chat-message';
 import { ChatComposerSkeleton, ChatThreadSkeleton, LoadingLabel } from '@/components/loading/loading-state';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
-import { fetchActiveStoryline, previewContextPack, streamStorylineChat } from '@/lib/api/story';
+import { fetchActiveStoryline, fetchRuntimeDiagnostics, previewContextPack, retryRuntimeDiagnostics, streamStorylineChat } from '@/lib/api/story';
 import { appendMessagesToContextPreview, mergeStoryChatCurrentMessages, updateActiveStorylineLastInteraction } from './story-chat-cache';
 import { useWorkspaceStore } from '@/lib/state/workspace-store';
 import { cn } from '@/lib/utils';
@@ -59,8 +72,99 @@ function LastExchangeDivider({ time }: { time: string }) {
   );
 }
 
+function runtimeStatusLabel(status: RuntimeDiagnosticsSnapshotResponse['status']): string {
+  switch (status) {
+    case 'processing':
+      return '处理中';
+    case 'updated':
+      return '已更新';
+    case 'failed':
+      return '失败';
+    case 'uncertain':
+      return '待确认';
+    case 'skipped':
+    default:
+      return '未触发';
+  }
+}
+
+function runtimeStatusBadgeVariant(status: RuntimeDiagnosticsSnapshotResponse['status']): 'default' | 'secondary' | 'outline' {
+  switch (status) {
+    case 'updated':
+      return 'default';
+    case 'failed':
+    case 'processing':
+    case 'uncertain':
+      return 'secondary';
+    case 'skipped':
+    default:
+      return 'outline';
+  }
+}
+
+function runtimeStatusBadgeClassName(status: RuntimeDiagnosticsSnapshotResponse['status']): string | undefined {
+  if (status === 'failed') {
+    return 'border-destructive/40 text-destructive';
+  }
+  return undefined;
+}
+
+function RuntimeDiagnosticsBanner(props: {
+  diagnostics: RuntimeDiagnosticsSnapshotResponse;
+  retrying: boolean;
+  onOpen: () => void;
+  onRetry: () => void;
+}) {
+  const { diagnostics, retrying, onOpen, onRetry } = props;
+  const productWriteCount = diagnostics.productMemory?.writeResults.length ?? 0;
+  const latestPendingPrompt = diagnostics.productMemory?.pendingSemanticFrames[0]?.prompt;
+  const Icon = diagnostics.status === 'processing'
+    ? LoaderCircle
+    : diagnostics.status === 'failed'
+      ? AlertCircle
+      : CheckCircle2;
+
+  return (
+    <div className="rounded-[24px] border border-border/70 bg-card/70 px-4 py-3 shadow-[0_16px_40px_-24px_var(--companion-glass-shadow)] backdrop-blur-xl">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={runtimeStatusBadgeVariant(diagnostics.status)} className={runtimeStatusBadgeClassName(diagnostics.status)}>
+              {runtimeStatusLabel(diagnostics.status)}
+            </Badge>
+            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Icon className={cn('h-4 w-4', diagnostics.status === 'processing' && 'animate-spin')} />
+              <span>后台派生状态</span>
+            </div>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            {diagnostics.statusDetail ?? '当前 storyline 暂无最近一次后台派生记录。'}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {diagnostics.worldStateDebug ? <span>world-state：{diagnostics.worldStateDebug.processingPath ?? '无路径'}</span> : null}
+            {productWriteCount > 0 ? <span>memory writes：{productWriteCount}</span> : null}
+            {latestPendingPrompt ? <span>pending：{latestPendingPrompt}</span> : null}
+            {diagnostics.lastUpdatedAt ? <span>更新于：{formatExchangeTime(diagnostics.lastUpdatedAt)}</span> : null}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button type="button" size="sm" variant="outline" className="rounded-full" onClick={onOpen}>
+            <Search className="mr-2 h-4 w-4" />
+            诊断
+          </Button>
+          <Button type="button" size="sm" variant="outline" className="rounded-full" onClick={onRetry} disabled={!diagnostics.canRetry || retrying}>
+            <RotateCcw className={cn('mr-2 h-4 w-4', retrying && 'animate-spin')} />
+            重试
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function StoryChatRoute() {
   const [draft, setDraft] = useState('');
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [streamingState, setStreamingState] = useState<StreamingState | null>(null);
   const [hasStartedChat, setHasStartedChat] = useState(false);
   const [conversationStartIndex, setConversationStartIndex] = useState<number | null>(null);
@@ -81,6 +185,21 @@ export function StoryChatRoute() {
     queryFn: () => previewContextPack(activeStoryline!.id),
     enabled: Boolean(activeStoryline?.id),
     refetchInterval: (query) => query.state.data?.worldStateDebug?.processingStatus === 'scheduled' ? 1000 : false,
+  });
+  const runtimeDiagnosticsQuery = useQuery({
+    queryKey: ['runtime-diagnostics', activeStoryline?.id],
+    queryFn: () => fetchRuntimeDiagnostics(activeStoryline!.id),
+    enabled: Boolean(activeStoryline?.id),
+    refetchInterval: (query) => query.state.data?.status === 'processing' ? 1000 : false,
+  });
+  const retryDiagnosticsMutation = useMutation({
+    mutationFn: async () => retryRuntimeDiagnostics(activeStoryline!.id),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['runtime-diagnostics', activeStoryline?.id] }),
+        queryClient.invalidateQueries({ queryKey: ['context-preview', activeStoryline?.id] }),
+      ]);
+    },
   });
   const isMacDesktop = window.bubbleTownDesktop?.platform === 'darwin';
 
@@ -162,6 +281,7 @@ export function StoryChatRoute() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['active-storyline'] }),
       queryClient.invalidateQueries({ queryKey: ['context-preview'] }),
+      queryClient.invalidateQueries({ queryKey: ['runtime-diagnostics'] }),
     ]);
   }
 
@@ -390,6 +510,20 @@ export function StoryChatRoute() {
         className={cn('relative z-10 min-h-0 flex-1 px-6 py-5', isRegularChatState ? 'overflow-y-auto' : 'flex items-center justify-center overflow-hidden')}
       >
         <div className={cn('mx-auto flex w-full max-w-3xl flex-col gap-4', isRegularChatState && 'story-chat-expanded')}>
+          {runtimeDiagnosticsQuery.data ? (
+            <RuntimeDiagnosticsBanner
+              diagnostics={runtimeDiagnosticsQuery.data}
+              retrying={retryDiagnosticsMutation.isPending}
+              onOpen={() => setDiagnosticsOpen(true)}
+              onRetry={() => {
+                if (runtimeDiagnosticsQuery.data.canRetry) {
+                  retryDiagnosticsMutation.mutate();
+                } else {
+                  setDiagnosticsOpen(true);
+                }
+              }}
+            />
+          ) : null}
           {contextPreviewQuery.isLoading && !isRegularChatState ? (
             <div className="w-full">{renderComposer({ centered: true })}</div>
           ) : isRegularChatState ? (
@@ -475,6 +609,62 @@ export function StoryChatRoute() {
           </div>
         </div>
       ) : null}
+
+      <Dialog open={diagnosticsOpen} onOpenChange={setDiagnosticsOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Runtime Diagnostics</DialogTitle>
+            <DialogDescription>
+              查看最近一次 world-state 与 product memory 派生结果。
+            </DialogDescription>
+          </DialogHeader>
+          {runtimeDiagnosticsQuery.data ? (
+            <div className="space-y-4 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge
+                  variant={runtimeStatusBadgeVariant(runtimeDiagnosticsQuery.data.status)}
+                  className={runtimeStatusBadgeClassName(runtimeDiagnosticsQuery.data.status)}
+                >
+                  {runtimeStatusLabel(runtimeDiagnosticsQuery.data.status)}
+                </Badge>
+                <span className="text-muted-foreground">{runtimeDiagnosticsQuery.data.statusDetail}</span>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/50 p-3">
+                <div className="mb-2 flex items-center gap-2 font-medium">
+                  <Search className="h-4 w-4" />
+                  World State
+                </div>
+                <pre className="overflow-x-auto whitespace-pre-wrap text-xs text-muted-foreground">
+                  {JSON.stringify(runtimeDiagnosticsQuery.data.worldStateDebug ?? null, null, 2)}
+                </pre>
+              </div>
+              <div className="rounded-xl border border-border/70 bg-card/50 p-3">
+                <div className="mb-2 flex items-center gap-2 font-medium">
+                  <Search className="h-4 w-4" />
+                  Product Memory
+                </div>
+                <pre className="overflow-x-auto whitespace-pre-wrap text-xs text-muted-foreground">
+                  {JSON.stringify(runtimeDiagnosticsQuery.data.productMemory ?? null, null, 2)}
+                </pre>
+              </div>
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="rounded-full"
+                  disabled={!runtimeDiagnosticsQuery.data.canRetry || retryDiagnosticsMutation.isPending}
+                  onClick={() => retryDiagnosticsMutation.mutate()}
+                >
+                  <RotateCcw className={cn('mr-2 h-4 w-4', retryDiagnosticsMutation.isPending && 'animate-spin')} />
+                  重试最近一次派生
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">当前 storyline 暂无最近一次后台派生记录。</div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

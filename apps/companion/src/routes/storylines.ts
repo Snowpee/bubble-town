@@ -7,10 +7,19 @@ import type {
   StorylineChatStreamStartEvent,
 } from '@bubble-town/shared';
 import { streamSseResponse } from '../lib/sse.js';
-import { previewContextPack, previewContextPackForInput, sendStorylineChat, streamStorylineChat } from '../features/story/story-chat-service.js';
+import {
+  getLatestRuntimeDiagnosticsSnapshot,
+  getLatestWorldStateDebugSnapshot,
+  previewContextPackForInput,
+  retryLatestRuntimeDiagnostics,
+  sendStorylineChat,
+  streamStorylineChat,
+} from '../features/story/story-chat-service.js';
 import {
   consolidateStorylineMemory,
   correctMemory,
+  cancelPendingSemanticFrame,
+  confirmPendingSemanticFrame,
   createActivityLog,
   createMemoryRecord,
   createSuppressedMemory,
@@ -21,9 +30,11 @@ import {
   getStoryline,
   listStorylineActivityLogs,
   listStorylineMemories,
+  listPendingSemanticFrames,
   listStorylineSuppressedMemories,
   searchStorylineRelativeTime,
   listStorylines,
+  permanentlyDeleteMemoryRecord,
   setActiveStoryline,
   setActiveStorylineForProfile,
   updateActivityLog,
@@ -129,6 +140,36 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
     }
   });
 
+  app.get('/api/storylines/:id/world-state/debug', async (request, reply) => {
+    const params = request.params as { id: string };
+    try {
+      return getLatestWorldStateDebugSnapshot(params.id);
+    } catch (error) {
+      reply.code(404);
+      return { message: error instanceof Error ? error.message : '未找到目标剧情。' };
+    }
+  });
+
+  app.get('/api/storylines/:id/runtime-diagnostics', async (request, reply) => {
+    const params = request.params as { id: string };
+    try {
+      return getLatestRuntimeDiagnosticsSnapshot(params.id);
+    } catch (error) {
+      reply.code(404);
+      return { message: error instanceof Error ? error.message : '未找到目标剧情。' };
+    }
+  });
+
+  app.post('/api/storylines/:id/runtime-diagnostics/retry', async (request, reply) => {
+    const params = request.params as { id: string };
+    try {
+      return await retryLatestRuntimeDiagnostics(params.id);
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : '最近一次后台派生重试失败。' };
+    }
+  });
+
   app.post('/api/storylines/:id/relative-time-search', async (request, reply) => {
     const params = request.params as { id: string };
     const body = request.body as { input?: string };
@@ -188,6 +229,44 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
     }
   });
 
+  app.post('/api/storylines/:id/memories/batch', async (request, reply) => {
+    const params = request.params as { id: string };
+    const body = request.body as { memoryIds?: string[]; action?: 'hide' | 'restore' | 'delete' };
+    if (!getStoryline(params.id)) {
+      reply.code(404);
+      return { message: '未找到目标剧情。' };
+    }
+    const memoryIds = Array.from(new Set((body.memoryIds ?? []).map((id) => id.trim()).filter(Boolean)));
+    if (memoryIds.length === 0) {
+      reply.code(400);
+      return { message: '请选择需要批量处理的记忆。' };
+    }
+    const statusByAction = {
+      hide: 'hidden',
+      restore: 'active',
+      delete: 'deleted',
+    } as const;
+    const nextStatus = body.action ? statusByAction[body.action] : undefined;
+    if (!nextStatus) {
+      reply.code(400);
+      return { message: '不支持的批量记忆操作。' };
+    }
+
+    const storylineMemoryIds = new Set(listStorylineMemories(params.id).map((memory) => memory.id));
+    const memories = [];
+    for (const memoryId of memoryIds) {
+      if (!storylineMemoryIds.has(memoryId)) {
+        reply.code(404);
+        return { message: '批量操作包含不属于当前剧情的记忆。' };
+      }
+      const memory = updateMemoryRecord(memoryId, { status: nextStatus });
+      if (memory) {
+        memories.push(memory);
+      }
+    }
+    return { memories };
+  });
+
   app.patch('/api/memories/:id', async (request, reply) => {
     const params = request.params as { id: string };
     const memory = updateMemoryRecord(params.id, request.body as { content?: string; status?: 'active' | 'hidden' | 'deleted' });
@@ -226,6 +305,27 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
       return { message: '未找到目标记忆。' };
     }
     return memory;
+  });
+
+  app.delete('/api/memories/:id', async (request, reply) => {
+    const params = request.params as { id: string };
+    const current = listStorylines()
+      .flatMap((storyline) => listStorylineMemories(storyline.id))
+      .find((memory) => memory.id === params.id);
+    if (!current) {
+      reply.code(404);
+      return { message: '未找到目标记忆。' };
+    }
+    if (current.status !== 'deleted') {
+      reply.code(400);
+      return { message: '只有 deleted 状态的记忆可以永久删除。' };
+    }
+    const memory = permanentlyDeleteMemoryRecord(params.id);
+    if (!memory) {
+      reply.code(404);
+      return { message: '未找到目标记忆。' };
+    }
+    return { success: true };
   });
 
   app.post('/api/memories/:id/correct', async (request, reply) => {
@@ -274,6 +374,43 @@ export async function registerStorylineRoutes(app: FastifyInstance) {
       return { message: '未找到目标抑制规则。' };
     }
     return { success: true };
+  });
+
+  app.get('/api/storylines/:id/pending-semantic-frames', async (request, reply) => {
+    const params = request.params as { id: string };
+    if (!getStoryline(params.id)) {
+      reply.code(404);
+      return { message: '未找到目标剧情。' };
+    }
+    return { pendingSemanticFrames: listPendingSemanticFrames(params.id) };
+  });
+
+  app.post('/api/storylines/:id/pending-semantic-frames/:frameId/confirm', async (request, reply) => {
+    const params = request.params as { id: string; frameId: string };
+    try {
+      return confirmPendingSemanticFrame({
+        storylineId: params.id,
+        frameId: params.frameId,
+        ...(request.body as { sourceMessageIds?: string[]; userReply?: string } | undefined),
+      });
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : '确认待确认语义帧失败。' };
+    }
+  });
+
+  app.post('/api/storylines/:id/pending-semantic-frames/:frameId/cancel', async (request, reply) => {
+    const params = request.params as { id: string; frameId: string };
+    try {
+      return cancelPendingSemanticFrame({
+        storylineId: params.id,
+        frameId: params.frameId,
+        ...(request.body as { userReply?: string } | undefined),
+      });
+    } catch (error) {
+      reply.code(400);
+      return { message: error instanceof Error ? error.message : '取消待确认语义帧失败。' };
+    }
   });
 
   app.get('/api/storylines/:id/activity', async (request, reply) => {

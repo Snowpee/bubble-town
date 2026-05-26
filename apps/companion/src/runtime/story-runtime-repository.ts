@@ -4,6 +4,7 @@ import type {
   ActivityLog,
   Character,
   MemoryRecord,
+  PendingSemanticFrame,
   RuntimeSession,
   Storyline,
   SuppressedMemory,
@@ -19,6 +20,7 @@ export interface StoryRuntimeSnapshot {
   memoryRecords: MemoryRecord[];
   suppressedMemories: SuppressedMemory[];
   activityLogs: ActivityLog[];
+  pendingSemanticFrames: PendingSemanticFrame[];
 }
 
 export const EMPTY_STORY_RUNTIME_SNAPSHOT: StoryRuntimeSnapshot = {
@@ -29,6 +31,7 @@ export const EMPTY_STORY_RUNTIME_SNAPSHOT: StoryRuntimeSnapshot = {
   memoryRecords: [],
   suppressedMemories: [],
   activityLogs: [],
+  pendingSemanticFrames: [],
 };
 
 export interface StoryRuntimePersistenceAdapter {
@@ -71,6 +74,7 @@ export function normalizeStoryRuntimeSnapshot(parsed?: Partial<StoryRuntimeSnaps
     memoryRecords: Array.isArray(parsed?.memoryRecords) ? parsed.memoryRecords : [],
     suppressedMemories: Array.isArray(parsed?.suppressedMemories) ? parsed.suppressedMemories : [],
     activityLogs: Array.isArray(parsed?.activityLogs) ? parsed.activityLogs : [],
+    pendingSemanticFrames: Array.isArray(parsed?.pendingSemanticFrames) ? parsed.pendingSemanticFrames : [],
   };
 }
 
@@ -218,4 +222,10 @@ export function selectAllActivityLogs(snapshot: StoryRuntimeSnapshot, storylineI
   return snapshot.activityLogs
     .filter((entry) => entry.storylineId === storylineId)
     .sort((left, right) => right.happenedAt.localeCompare(left.happenedAt));
+}
+
+export function selectPendingSemanticFrames(snapshot: StoryRuntimeSnapshot, storylineId: string): PendingSemanticFrame[] {
+  return snapshot.pendingSemanticFrames
+    .filter((frame) => frame.storylineId === storylineId && frame.status === 'pending')
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }

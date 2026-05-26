@@ -235,7 +235,120 @@ test('ContextPack 始终注入当前 session 边界锚点', () => {
     assert.equal(contextPack.sessionAnchors.firstAssistantMessage?.content, '这么晚还不睡呀~');
     assert.equal(contextPack.sessionAnchors.latestAssistantMessage?.content, '后续消息 14');
     assert.match(rendered, /sessionAnchors:/);
-    assert.match(rendered, /firstUserMessage: \[user\] hi/);
+    assert.match(rendered, /firstUserMessage: \[local .*; utc .*] \[user\] hi/);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('ContextPack 在跨天时显式提示短时现场事实不能默认延续，并为 recentMessages 标注时间', () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const profileId = 'sami-story-001';
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: profileId,
+      title: '跨天时间感知',
+    });
+    touchStorylineInteraction(storyline.id, new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString());
+    upsertRuntimeSession({
+      storylineId: storyline.id,
+      hermesProfileId: profileId,
+      hermesSessionId: 'cross-day-session',
+      previousResponseId: 'resp-cross-day',
+      reason: 'continue',
+    });
+
+    const sessionsDir = path.join(hermesHome, 'profiles', profileId, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, 'session_cross-day-session.json'),
+      `${JSON.stringify({
+        session_id: 'cross-day-session',
+        session_start: '2026-05-24T06:20:00.000Z',
+        messages: [
+          {
+            role: 'user',
+            content: '下雨了',
+            created_at: '2026-05-24T06:26:55.765Z',
+          },
+          {
+            role: 'assistant',
+            content: '听雨声很适合在家休息。',
+            created_at: '2026-05-24T06:27:10.000Z',
+          },
+          {
+            role: 'user',
+            content: '我回来了，包还在，手机丢了。',
+            created_at: '2026-05-25T07:00:00.000Z',
+          },
+        ],
+      })}\n`,
+      'utf8',
+    );
+
+    const contextPack = buildContextPack(storyline.id, { input: '我回来了，包还在，手机丢了。' });
+    const rendered = renderContextPackInstructions(contextPack);
+
+    assert.equal(contextPack.continuityMode, 'new_day');
+    assert.match(rendered, /跨天后，历史消息里提到的天气、昼夜、位置、正在做的事、手上物品或设备状态，只能视为当时成立/);
+    assert.match(rendered, /如果历史消息与当前权威时间存在跨天或明显时间间隔，天气、昼夜、位置、正在进行中的动作、随身物品和设备状态等短时现场事实不能默认延续到现在/);
+    assert.match(rendered, /sceneProjection 只表示当前场景里最后确认且仍稳定成立的重要物品状态；它不能替代 activity timeline，也不能直接回答“事情是什么时候发生的”/);
+    assert.match(rendered, /recentMessages:\n(?:- .*\n)*- \[local .*; utc 2026-05-24T06:26:55.765Z] \[user\] 下雨了/);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('ContextPack 在时间追问时显式要求优先依据带时间戳上下文回答', () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const profileId = 'sami-story-001';
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: profileId,
+      title: '时间追问',
+    });
+    upsertRuntimeSession({
+      storylineId: storyline.id,
+      hermesProfileId: profileId,
+      hermesSessionId: 'temporal-follow-up',
+      previousResponseId: 'resp-temporal-follow-up',
+      reason: 'continue',
+    });
+
+    const sessionsDir = path.join(hermesHome, 'profiles', profileId, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, 'session_temporal-follow-up.json'),
+      `${JSON.stringify({
+        session_id: 'temporal-follow-up',
+        session_start: '2026-05-24T06:20:00.000Z',
+        messages: [
+          {
+            role: 'user',
+            content: '我手机放门卫那里了',
+            created_at: '2026-05-24T06:26:55.765Z',
+          },
+          {
+            role: 'user',
+            content: '我回来了，包还在，手机丢了。',
+            created_at: '2026-05-25T07:00:00.000Z',
+          },
+        ],
+      })}\n`,
+      'utf8',
+    );
+
+    const contextPack = buildContextPack(storyline.id, { input: '你再想想是什么时候我说手机丢的' });
+    const rendered = renderContextPackInstructions(contextPack);
+
+    assert.match(rendered, /当用户追问“什么时候”“昨天还是今天”“刚才哪一轮说的”时，优先根据 activityLogs、recentMessages、sessionAnchors 的时间戳还原事件顺序/);
+    assert.match(rendered, /如果用户追问某件事是什么时候发生的、昨天还是今天，优先依据 activityLogs、recentMessages 和 sessionAnchors 里的时间戳还原事件顺序/);
   } finally {
     cleanupHermesHome(hermesHome);
   }

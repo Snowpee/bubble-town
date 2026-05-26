@@ -1,7 +1,35 @@
-import type { MemoryCandidate, Storyline, WorldStateDebugTrace, WorldStateUpdateCandidate } from '@bubble-town/shared';
-import { createActivityLog, createMemoryRecord, createSuppressedMemory, listAllMemoryRecords, listAllSuppressedMemories } from '../../store/story-runtime-store.js';
+import crypto from 'node:crypto';
+import type {
+  MemoryCandidate,
+  PendingSemanticFrame,
+  ProductMemoryDiagnosticsEntry,
+  ProductMemoryDiagnosticsSnapshot,
+  ProductMemoryWriteResult,
+  RuntimeDiagnosticsSnapshotResponse,
+  RuntimeDiagnosticsStatus,
+  SemanticEvent,
+  Storyline,
+  WorldStateDebugTrace,
+  WorldStateUpdateCandidate,
+} from '@bubble-town/shared';
+import {
+  createActivityLog,
+  createMemoryRecord,
+  createSuppressedMemory,
+  listAllActivityLogs,
+  listAllMemoryRecords,
+  listPendingSemanticFrames,
+  listAllSuppressedMemories,
+  updateActivityLog,
+} from '../../store/story-runtime-store.js';
 import { resolveAuxiliaryLlmRuntime } from '../../store/auxiliary-llm-store.js';
-import { extractRuleBasedMemoryCandidates } from '../memory/memory-candidates.js';
+import { extractLegacyRuleBasedMemoryCandidates } from '../memory/memory-candidates.js';
+import { AUTO_CONSOLIDATION_ELIGIBLE_TAG, CONSOLIDATED_TAG } from '../memory/memory-governance.js';
+import {
+  createStoryFactCandidateFromActivityLogs,
+  persistMemoryCandidate,
+  resolvePendingSemanticFrameReply,
+} from '../memory/memory-write-service.js';
 import type { WorldStateCandidateExtractor, WorldStateExtractorExecutionOptions } from '../world-state/world-state-extractor.js';
 import { createStructuredWorldStateExtractor } from '../world-state/world-state-extractor.js';
 import type { WorldStateSideChannelGate } from '../world-state/world-state-side-channel.js';
@@ -10,13 +38,122 @@ import { applyWorldStateUpdateCandidate, buildSceneProjection, getStorylineScene
 
 const pendingWorldStateJobs = new Map<string, Promise<void>>();
 const latestWorldStateDebugByStoryline = new Map<string, WorldStateDebugTrace>();
+const latestProductMemoryDiagnosticsByStoryline = new Map<string, ProductMemoryDiagnosticsSnapshot>();
+const latestRetryContextByStoryline = new Map<string, {
+  userInput: string;
+  assistantOutput: string;
+  sourceMessageIds?: string[];
+}>();
 
 function cloneWorldStateDebugTrace(trace: WorldStateDebugTrace): WorldStateDebugTrace {
   return JSON.parse(JSON.stringify(trace)) as WorldStateDebugTrace;
 }
 
+function cloneProductMemoryDiagnosticsSnapshot(
+  snapshot: ProductMemoryDiagnosticsSnapshot,
+): ProductMemoryDiagnosticsSnapshot {
+  return JSON.parse(JSON.stringify(snapshot)) as ProductMemoryDiagnosticsSnapshot;
+}
+
 function storeLatestWorldStateDebug(trace: WorldStateDebugTrace) {
   latestWorldStateDebugByStoryline.set(trace.storylineId, cloneWorldStateDebugTrace(trace));
+}
+
+function storeLatestProductMemoryDiagnostics(snapshot: ProductMemoryDiagnosticsSnapshot) {
+  latestProductMemoryDiagnosticsByStoryline.set(
+    snapshot.storylineId,
+    cloneProductMemoryDiagnosticsSnapshot(snapshot),
+  );
+}
+
+function mapWriteResultEntry(result: ProductMemoryWriteResult): ProductMemoryDiagnosticsEntry {
+  return {
+    outcome: result.outcome,
+    kind: result.candidate.kind,
+    content: result.candidate.content,
+    memoryId: result.memoryId,
+    existingMemoryId: result.existingMemoryId,
+    pendingFrameId: result.pendingFrameId,
+    reason: result.reason,
+    error: result.error,
+  };
+}
+
+function getWorldStateDiagnosticsStatus(trace?: WorldStateDebugTrace): RuntimeDiagnosticsStatus | undefined {
+  if (!trace) {
+    return undefined;
+  }
+  if (trace.processingStatus === 'scheduled') {
+    return 'processing';
+  }
+  if (trace.error || trace.applyResults.some((result) => result.outcome === 'error')) {
+    return 'failed';
+  }
+  if (trace.updated) {
+    return 'updated';
+  }
+  if (trace.processingPath === 'uncertain_fallback_extractor') {
+    return 'uncertain';
+  }
+  return 'skipped';
+}
+
+function getProductMemoryDiagnosticsStatus(
+  snapshot?: ProductMemoryDiagnosticsSnapshot,
+): RuntimeDiagnosticsStatus | undefined {
+  if (!snapshot) {
+    return undefined;
+  }
+  if (snapshot.writeResults.some((result) => result.outcome === 'error')) {
+    return 'failed';
+  }
+  if (snapshot.writeResults.some((result) => result.outcome === 'created')) {
+    return 'updated';
+  }
+  if (
+    snapshot.writeResults.some((result) => result.outcome === 'pending_confirmation')
+    || snapshot.pendingSemanticFrames.length > 0
+  ) {
+    return 'uncertain';
+  }
+  return 'skipped';
+}
+
+function buildRuntimeDiagnosticsStatusDetail(input: {
+  worldStateDebug?: WorldStateDebugTrace;
+  productMemory?: ProductMemoryDiagnosticsSnapshot;
+  status: RuntimeDiagnosticsStatus;
+}): string | undefined {
+  if (input.status === 'failed') {
+    return input.worldStateDebug?.error
+      ?? input.productMemory?.writeResults.find((result) => result.error)?.error
+      ?? '最近一次后台派生执行失败。';
+  }
+  if (input.status === 'processing') {
+    return input.worldStateDebug?.skippedReason ?? '最近一次后台派生仍在处理中。';
+  }
+  if (input.status === 'updated') {
+    const createdCount = input.productMemory?.writeResults
+      .filter((result) => result.outcome === 'created').length ?? 0;
+    if (input.worldStateDebug?.updated && createdCount > 0) {
+      return `最近一次派生已更新 world-state，并写入 ${createdCount} 条 product memory。`;
+    }
+    if (input.worldStateDebug?.updated) {
+      return '最近一次派生已更新 world-state。';
+    }
+    if (createdCount > 0) {
+      return `最近一次派生已写入 ${createdCount} 条 product memory。`;
+    }
+    return '最近一次后台派生已完成更新。';
+  }
+  if (input.status === 'uncertain') {
+    return input.productMemory?.pendingSemanticFrames[0]?.prompt
+      ?? input.worldStateDebug?.skippedReason
+      ?? '最近一次派生需要确认或进入了 uncertain 路径。';
+  }
+  return input.worldStateDebug?.skippedReason
+    ?? input.productMemory?.writeResults[0]?.reason
+    ?? '最近一次后台派生未产生新的更新。';
 }
 
 function markWorldStateDebugEvent(
@@ -70,26 +207,6 @@ function hasDuplicateSuppression(storylineId: string, pattern: string): boolean 
   return listAllSuppressedMemories(storylineId).some((memory) => memory.status === 'active' && memory.pattern === pattern);
 }
 
-function createMemoryIfNew(storyline: Storyline, candidate: MemoryCandidate) {
-  if (!candidate.shouldPersist || candidate.confidence < 0.45) {
-    return undefined;
-  }
-  if (hasDuplicateMemory(storyline.id, candidate.content)) {
-    return undefined;
-  }
-  return createMemoryRecord(storyline.id, {
-    content: candidate.content,
-    scope: candidate.scope,
-    source: candidate.source,
-    kind: candidate.kind,
-    lifespan: candidate.lifespan,
-    reason: candidate.reason,
-    importance: candidate.importance,
-    confidence: candidate.confidence,
-    sourceMessageIds: candidate.sourceMessageIds,
-  });
-}
-
 function extractSuppression(input: string): { pattern: string; reason: string } | undefined {
   if (!/不要.*提|别.*提|不想.*提|以后别提/.test(input)) {
     return undefined;
@@ -102,6 +219,84 @@ function extractSuppression(input: string): { pattern: string; reason: string } 
 
 function createActivitySummary(input: string, output: string): string {
   return `用户提到「${compact(input, 64)}」，角色回应「${compact(output, 72)}」。`;
+}
+
+function createTurnSemanticEvent(input: {
+  userInput: string;
+  sourceMessageIds?: string[];
+}): SemanticEvent {
+  return {
+    id: `semantic_event_${crypto.randomUUID()}`,
+    eventType: 'story_event',
+    temporalScope: 'session',
+    stability: 'uncertain',
+    evidenceSpan: compact(input.userInput, 360),
+    confidence: 0.62,
+    sourceMessageIds: input.sourceMessageIds,
+  };
+}
+
+function collectCreatedMemory(storylineId: string, memoryId?: string) {
+  if (!memoryId) {
+    return undefined;
+  }
+  return listAllMemoryRecords(storylineId).find((memory) => memory.id === memoryId);
+}
+
+function listUnconsolidatedActivityLogs(storylineId: string, limit = 3) {
+  const logs = listAllActivityLogs(storylineId)
+    .filter((entry) => entry.status === 'active')
+    .filter((entry) => entry.tags.includes(AUTO_CONSOLIDATION_ELIGIBLE_TAG))
+    .filter((entry) => !entry.tags.includes(CONSOLIDATED_TAG))
+    .sort((left, right) => left.happenedAt.localeCompare(right.happenedAt));
+  return Number.isFinite(limit) ? logs.slice(0, limit) : logs;
+}
+
+function findLatestActiveStoryFact(storylineId: string) {
+  return listAllMemoryRecords(storylineId)
+    .filter((memory) => memory.kind === 'story_fact' && memory.status === 'active' && !memory.supersededBy)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+}
+
+function resolveActivityLogsByIds(storylineId: string, activityIds: string[]) {
+  const byId = new Map(listAllActivityLogs(storylineId).map((entry) => [entry.id, entry]));
+  return activityIds
+    .map((id) => byId.get(id))
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+    .sort((left, right) => left.happenedAt.localeCompare(right.happenedAt));
+}
+
+function createStoryFactCandidateForCurrentState(storylineId: string) {
+  const unconsolidated = listUnconsolidatedActivityLogs(storylineId, Number.POSITIVE_INFINITY);
+  const existing = findLatestActiveStoryFact(storylineId);
+  if (existing?.sourceActivityIds && unconsolidated.length >= 2) {
+    const previousLogs = resolveActivityLogsByIds(storylineId, existing.sourceActivityIds);
+    const combinedLogs = [...previousLogs, ...unconsolidated]
+      .sort((left, right) => left.happenedAt.localeCompare(right.happenedAt));
+    return createStoryFactCandidateFromActivityLogs(combinedLogs, {
+      supersedes: [existing.id],
+    });
+  }
+
+  if (unconsolidated.length >= 3) {
+    return createStoryFactCandidateFromActivityLogs(unconsolidated.slice(0, 3));
+  }
+
+  return undefined;
+}
+
+function listRecentActivityLogContext(storylineId: string, currentActivityId?: string, limit = 3) {
+  return listAllActivityLogs(storylineId)
+    .filter((entry) => entry.status === 'active')
+    .sort((left, right) => right.happenedAt.localeCompare(left.happenedAt))
+    .slice(0, limit)
+    .reverse()
+    .map((entry) => ({
+      id: entry.id,
+      happenedAt: entry.happenedAt,
+      summary: entry.summary,
+      ...(entry.id === currentActivityId ? { isCurrentTurn: true } : {}),
+    }));
 }
 
 function applyWorldStateCandidates(input: {
@@ -267,6 +462,53 @@ export function getLatestWorldStateDebugForStoryline(storylineId: string): World
   return trace ? cloneWorldStateDebugTrace(trace) : undefined;
 }
 
+export function getLatestRuntimeDiagnosticsForStoryline(
+  storylineId: string,
+): RuntimeDiagnosticsSnapshotResponse | undefined {
+  const worldStateDebug = getLatestWorldStateDebugForStoryline(storylineId);
+  const productMemory = latestProductMemoryDiagnosticsByStoryline.get(storylineId);
+  if (!worldStateDebug && !productMemory) {
+    return undefined;
+  }
+
+  const worldStateStatus = getWorldStateDiagnosticsStatus(worldStateDebug);
+  const productMemoryStatus = getProductMemoryDiagnosticsStatus(productMemory);
+  let status: RuntimeDiagnosticsStatus = 'skipped';
+
+  if (worldStateStatus === 'processing') {
+    status = 'processing';
+  } else if (worldStateStatus === 'failed' || productMemoryStatus === 'failed') {
+    status = 'failed';
+  } else if (worldStateStatus === 'updated' || productMemoryStatus === 'updated') {
+    status = 'updated';
+  } else if (worldStateStatus === 'uncertain' || productMemoryStatus === 'uncertain') {
+    status = 'uncertain';
+  }
+
+  const lastUpdatedAt = [worldStateDebug?.lastUpdatedAt, productMemory?.lastUpdatedAt]
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => right.localeCompare(left))[0];
+
+  const canRetry = status === 'failed' || status === 'uncertain'
+    ? latestRetryContextByStoryline.has(storylineId)
+    : false;
+
+  return {
+    storylineId,
+    status,
+    statusDetail: buildRuntimeDiagnosticsStatusDetail({
+      worldStateDebug,
+      productMemory,
+      status,
+    }),
+    canRetry,
+    retryDisabledReason: canRetry ? undefined : '最近一次派生不支持重试。',
+    worldStateDebug,
+    productMemory: productMemory ? cloneProductMemoryDiagnosticsSnapshot(productMemory) : undefined,
+    lastUpdatedAt,
+  };
+}
+
 export async function recordStorylineTurnContinuity(input: {
   storyline: Storyline;
   userInput: string;
@@ -276,6 +518,7 @@ export async function recordStorylineTurnContinuity(input: {
   worldStateExtractor?: WorldStateCandidateExtractor;
   extractorExecutionOptions?: WorldStateExtractorExecutionOptions;
   awaitBackgroundWorldState?: boolean;
+  skipActivityLogCreation?: boolean;
 }) {
   const worldStateDebug: WorldStateDebugTrace = {
     storylineId: input.storyline.id,
@@ -303,16 +546,43 @@ export async function recordStorylineTurnContinuity(input: {
     memories: [] as NonNullable<ReturnType<typeof createMemoryRecord>>[],
     worldStateMemories: [] as NonNullable<ReturnType<typeof createMemoryRecord>>[],
     suppressedMemory: undefined as ReturnType<typeof createSuppressedMemory> | undefined,
+    pendingSemanticFrames: [] as ReturnType<typeof listPendingSemanticFrames>,
+    resolvedPendingSemanticFrame: undefined as ReturnType<typeof resolvePendingSemanticFrameReply>['frame'],
+    productMemoryWriteResults: [] as ProductMemoryWriteResult[],
     worldStateDebug,
   };
 
-  if (!isLowInformation(input.userInput, input.assistantOutput)) {
+  const pendingResolution = resolvePendingSemanticFrameReply({
+    storylineId: input.storyline.id,
+    userInput: input.userInput,
+    sourceMessageIds: input.sourceMessageIds,
+  });
+  created.resolvedPendingSemanticFrame = pendingResolution.frame;
+  if (pendingResolution.writeResult) {
+    created.productMemoryWriteResults.push(pendingResolution.writeResult);
+  }
+  if (pendingResolution.writeResult?.outcome === 'created') {
+    const memory = collectCreatedMemory(input.storyline.id, pendingResolution.writeResult.memoryId);
+    if (memory) {
+      created.memories.push(memory);
+    }
+  }
+
+  if (!input.skipActivityLogCreation && (!isLowInformation(input.userInput, input.assistantOutput) || input.worldStateGate || input.worldStateExtractor)) {
     created.activityLog = createActivityLog(input.storyline.id, {
       summary: createActivitySummary(input.userInput, input.assistantOutput),
-      tags: ['conversation', 'auto'],
+      tags: ['conversation', 'auto', AUTO_CONSOLIDATION_ELIGIBLE_TAG],
       sourceMessageIds: input.sourceMessageIds,
+      semanticEvents: [createTurnSemanticEvent({
+        userInput: input.userInput,
+        sourceMessageIds: input.sourceMessageIds,
+      })],
+      semanticSchemaVersion: 1,
+      semanticSource: 'structured',
     });
   }
+  const recentActivityLogs = listRecentActivityLogContext(input.storyline.id, created.activityLog?.id);
+  worldStateDebug.recentActivityLogs = recentActivityLogs;
 
   const suppression = extractSuppression(input.userInput);
   if (!suppression) {
@@ -325,6 +595,7 @@ export async function recordStorylineTurnContinuity(input: {
         assistantOutput: input.assistantOutput,
         sourceMessageIds: input.sourceMessageIds,
         sourceActivityIds: created.activityLog ? [created.activityLog.id] : undefined,
+        recentActivityLogs,
         executionOptions: input.extractorExecutionOptions,
         debugTrace: worldStateDebug,
       };
@@ -401,15 +672,47 @@ export async function recordStorylineTurnContinuity(input: {
       }
     }
 
-    for (const candidate of extractRuleBasedMemoryCandidates({
+    for (const candidate of extractLegacyRuleBasedMemoryCandidates({
       storyline: input.storyline,
       userInput: input.userInput,
       assistantOutput: input.assistantOutput,
       sourceMessageIds: input.sourceMessageIds,
     })) {
-      const memory = createMemoryIfNew(input.storyline, candidate);
+      const result = persistMemoryCandidate({
+        storylineId: input.storyline.id,
+        candidate,
+      });
+      created.productMemoryWriteResults.push(result);
+      const memory = collectCreatedMemory(input.storyline.id, result.memoryId);
       if (memory) {
         created.memories.push(memory);
+      }
+      if (result.outcome === 'pending_confirmation' && result.pendingFrameId) {
+        const frame = listPendingSemanticFrames(input.storyline.id)
+          .find((pending) => pending.id === result.pendingFrameId);
+        if (frame) {
+          created.pendingSemanticFrames.push(frame);
+        }
+      }
+    }
+
+    const storyFactCandidate = createStoryFactCandidateForCurrentState(input.storyline.id);
+    if (storyFactCandidate) {
+      const result = persistMemoryCandidate({
+        storylineId: input.storyline.id,
+        candidate: storyFactCandidate,
+        allowPendingConfirmation: false,
+      });
+      created.productMemoryWriteResults.push(result);
+      const memory = collectCreatedMemory(input.storyline.id, result.memoryId);
+      if (memory) {
+        created.memories.push(memory);
+        for (const activityId of storyFactCandidate.sourceActivityIds ?? []) {
+          updateActivityLog(activityId, {
+            tags: Array.from(new Set([...(listAllActivityLogs(input.storyline.id)
+              .find((entry) => entry.id === activityId)?.tags ?? []), CONSOLIDATED_TAG])),
+          });
+        }
       }
     }
   }
@@ -425,5 +728,48 @@ export async function recordStorylineTurnContinuity(input: {
     markWorldStateDebugEvent(worldStateDebug, 'completed', '当前 turn 的 world-state 处理已完成。');
   }
 
+  created.pendingSemanticFrames = listPendingSemanticFrames(input.storyline.id);
+  const productMemorySnapshot: ProductMemoryDiagnosticsSnapshot = {
+    storylineId: input.storyline.id,
+    userInput: input.userInput,
+    assistantOutput: input.assistantOutput,
+    writeResults: created.productMemoryWriteResults.map(mapWriteResultEntry),
+    pendingSemanticFrames: created.pendingSemanticFrames,
+    resolvedPendingSemanticFrame: created.resolvedPendingSemanticFrame,
+    lastUpdatedAt: new Date().toISOString(),
+  };
+  storeLatestProductMemoryDiagnostics(productMemorySnapshot);
+  latestRetryContextByStoryline.set(input.storyline.id, {
+    userInput: input.userInput,
+    assistantOutput: input.assistantOutput,
+    sourceMessageIds: input.sourceMessageIds,
+  });
+
   return created;
+}
+
+export async function retryLatestRuntimeDiagnosticsForStoryline(input: {
+  storyline: Storyline;
+}): Promise<RuntimeDiagnosticsSnapshotResponse> {
+  const latest = getLatestRuntimeDiagnosticsForStoryline(input.storyline.id);
+  if (!latest || (latest.status !== 'failed' && latest.status !== 'uncertain')) {
+    throw new Error('最近一次后台派生不支持重试。');
+  }
+  const retryContext = latestRetryContextByStoryline.get(input.storyline.id);
+  if (!retryContext) {
+    throw new Error('未找到可重试的最近一次派生输入。');
+  }
+  await recordStorylineTurnContinuity({
+    storyline: input.storyline,
+    userInput: retryContext.userInput,
+    assistantOutput: retryContext.assistantOutput,
+    sourceMessageIds: retryContext.sourceMessageIds,
+    awaitBackgroundWorldState: true,
+    skipActivityLogCreation: true,
+  });
+  const refreshed = getLatestRuntimeDiagnosticsForStoryline(input.storyline.id);
+  if (!refreshed) {
+    throw new Error('重试后未生成新的 diagnostics 结果。');
+  }
+  return refreshed;
 }

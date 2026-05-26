@@ -17,19 +17,25 @@ export {
   consolidateStorylineMemory,
   correctMemory,
 } from '../features/memory/memory-governance.js';
+export { createManualMemory as createMemoryRecord } from '../features/memory/memory-write-service.js';
+export {
+  cancelPendingSemanticFrame,
+  confirmPendingSemanticFrame,
+} from '../features/memory/memory-write-service.js';
 
 export {
   createActivityLog,
-  createMemoryRecord,
   createSuppressedMemory,
   createStoryline,
   deleteSuppressedMemory,
+  permanentlyDeleteMemoryRecord,
   setActiveStoryline,
   setActiveStorylineForProfile,
   updateActivityLog,
   updateMemoryRecord,
   updateStoryline,
 } from '../store/story-runtime-store.js';
+export { listPendingSemanticFrames } from '../store/story-runtime-store.js';
 
 export const getActiveStoryline = getActiveStorylineFromRuntime;
 export const getActiveStorylineId = getActiveStorylineIdFromRuntime;

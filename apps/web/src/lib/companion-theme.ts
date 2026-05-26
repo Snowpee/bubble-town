@@ -127,7 +127,7 @@ export function getCompanionThemeStyle(themeName: CompanionThemeName): CSSProper
   return {
     '--background': theme.bgStart,
     '--foreground': theme.text,
-    '--card': theme.card ?? 'rgba(255, 255, 255, 0.68)',
+    '--card': theme.card ?? 'rgba(255, 255, 255, 0.95)',
     '--card-foreground': theme.text,
     '--popover': theme.popover ?? 'rgba(255, 255, 255, 0.82)',
     '--popover-foreground': theme.text,

@@ -3,15 +3,22 @@ import type {
   ChatStreamStartEvent,
   ChatStreamToolProgressEvent,
   ContextPreviewResponse,
+  RuntimeDiagnosticsSnapshotResponse,
   StorylineChatRequest,
   StorylineChatResponse,
   StorylineChatStreamCompleteEvent,
   StorylineChatStreamStartEvent,
+  WorldStateDebugSnapshotResponse,
 } from '@bubble-town/shared';
 import { sendChat, streamChat } from '../../adapters/hermes/hermes-api.js';
 import { ensureManagedHermesGateway } from '../../adapters/hermes/hermes-gateway.js';
 import { buildContextPackFromRuntimeContext, renderContextPackInstructions } from './context-pack.js';
-import { getLatestWorldStateDebugForStoryline, recordStorylineTurnContinuity } from './story-memory-continuity.js';
+import {
+  getLatestRuntimeDiagnosticsForStoryline,
+  getLatestWorldStateDebugForStoryline,
+  recordStorylineTurnContinuity,
+  retryLatestRuntimeDiagnosticsForStoryline,
+} from './story-memory-continuity.js';
 import { rolloverStoryRuntimeSessionIfNeeded } from './story-session-rollover.js';
 import { getStorylineRuntimeContext, type StorylineRuntimeContext } from '../../services/runtime-service.js';
 import {
@@ -68,6 +75,42 @@ export function previewContextPackForInput(storylineId: string, input?: string):
     contextPack,
     renderedInstructions: renderContextPackInstructions(contextPack),
     worldStateDebug: getLatestWorldStateDebugForStoryline(storylineId),
+  };
+}
+
+export function getLatestWorldStateDebugSnapshot(storylineId: string): WorldStateDebugSnapshotResponse {
+  const runtimeContext = resolveStorylineRuntimeContextOrThrow(storylineId);
+  return {
+    storylineId,
+    sceneProjection: runtimeContext.sceneProjection,
+    worldStateDebug: getLatestWorldStateDebugForStoryline(storylineId),
+  };
+}
+
+export function getLatestRuntimeDiagnosticsSnapshot(storylineId: string): RuntimeDiagnosticsSnapshotResponse {
+  const runtimeContext = resolveStorylineRuntimeContextOrThrow(storylineId);
+  const diagnostics = getLatestRuntimeDiagnosticsForStoryline(storylineId);
+  return {
+    storylineId,
+    sceneProjection: runtimeContext.sceneProjection,
+    status: diagnostics?.status ?? 'skipped',
+    statusDetail: diagnostics?.statusDetail ?? '当前 storyline 暂无最近一次后台派生记录。',
+    canRetry: diagnostics?.canRetry ?? false,
+    retryDisabledReason: diagnostics?.retryDisabledReason ?? '当前没有可重试的后台派生记录。',
+    worldStateDebug: diagnostics?.worldStateDebug,
+    productMemory: diagnostics?.productMemory,
+    lastUpdatedAt: diagnostics?.lastUpdatedAt,
+  };
+}
+
+export async function retryLatestRuntimeDiagnostics(storylineId: string): Promise<RuntimeDiagnosticsSnapshotResponse> {
+  const runtimeContext = resolveStorylineRuntimeContextOrThrow(storylineId);
+  const diagnostics = await retryLatestRuntimeDiagnosticsForStoryline({
+    storyline: runtimeContext.storyline,
+  });
+  return {
+    ...diagnostics,
+    sceneProjection: getStorylineRuntimeContext(storylineId)?.sceneProjection,
   };
 }
 

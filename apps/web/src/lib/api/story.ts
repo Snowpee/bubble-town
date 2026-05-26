@@ -2,6 +2,8 @@ import type {
   ActiveStorylineResponse,
   ActivityLog,
   ActivityLogsResponse,
+  BatchMemoryRequest,
+  BatchMemoryResponse,
   Character,
   CharactersResponse,
   ContextPreviewResponse,
@@ -15,8 +17,11 @@ import type {
   MemoriesResponse,
   MemoryConsolidationResult,
   MemoryRecord,
+  PendingSemanticFrame,
+  PendingSemanticFramesResponse,
   ProfileContinuityValidationResponse,
   RelativeTimeSearchResponse,
+  RuntimeDiagnosticsSnapshotResponse,
   SuppressedMemoriesResponse,
   SuppressedMemory,
   Storyline,
@@ -27,6 +32,7 @@ import type {
   UpdateCharacterRequest,
   UpdateMemoryRequest,
   UpdateStorylineRequest,
+  WorldStateDebugSnapshotResponse,
   WorldStateDebugTrace,
 } from '@bubble-town/shared';
 import { apiDelete, apiGet, apiPatch, apiPost, COMPANION_URL } from './client';
@@ -258,6 +264,18 @@ export function previewContextPack(storylineId: string, input?: string) {
     });
 }
 
+export function fetchLatestWorldStateDebug(storylineId: string) {
+  return apiGet<WorldStateDebugSnapshotResponse>(`/api/storylines/${encodeURIComponent(storylineId)}/world-state/debug`);
+}
+
+export function fetchRuntimeDiagnostics(storylineId: string) {
+  return apiGet<RuntimeDiagnosticsSnapshotResponse>(`/api/storylines/${encodeURIComponent(storylineId)}/runtime-diagnostics`);
+}
+
+export function retryRuntimeDiagnostics(storylineId: string) {
+  return apiPost<RuntimeDiagnosticsSnapshotResponse>(`/api/storylines/${encodeURIComponent(storylineId)}/runtime-diagnostics/retry`, {});
+}
+
 export function sendStorylineChat(request: StorylineChatRequest) {
   return apiPost<StorylineChatResponse>(`/api/storylines/${encodeURIComponent(request.storylineId)}/chat/respond`, request)
     .then((response) => {
@@ -278,6 +296,10 @@ export function createStorylineMemory(storylineId: string, request: CreateMemory
   return apiPost<MemoryRecord>(`/api/storylines/${encodeURIComponent(storylineId)}/memories`, request);
 }
 
+export function batchUpdateMemories(storylineId: string, request: BatchMemoryRequest) {
+  return apiPost<BatchMemoryResponse>(`/api/storylines/${encodeURIComponent(storylineId)}/memories/batch`, request);
+}
+
 export function updateMemory(id: string, request: UpdateMemoryRequest) {
   return apiPatch<MemoryRecord>(`/api/memories/${encodeURIComponent(id)}`, request);
 }
@@ -292,6 +314,10 @@ export function deleteMemory(id: string) {
 
 export function restoreMemory(id: string) {
   return apiPost<MemoryRecord>(`/api/memories/${encodeURIComponent(id)}/restore`, {});
+}
+
+export function permanentlyDeleteMemory(id: string) {
+  return apiDelete<{ success: boolean }>(`/api/memories/${encodeURIComponent(id)}`);
 }
 
 export function correctMemory(id: string, request: CorrectMemoryRequest) {
@@ -312,6 +338,24 @@ export function createSuppressedMemory(storylineId: string, request: CreateSuppr
 
 export function deleteSuppressedMemory(id: string) {
   return apiDelete<{ success: boolean }>(`/api/suppressed-memories/${encodeURIComponent(id)}`);
+}
+
+export function fetchPendingSemanticFrames(storylineId: string) {
+  return apiGet<PendingSemanticFramesResponse>(`/api/storylines/${encodeURIComponent(storylineId)}/pending-semantic-frames`);
+}
+
+export function confirmPendingSemanticFrame(storylineId: string, frameId: string) {
+  return apiPost<{ frame: PendingSemanticFrame }>(
+    `/api/storylines/${encodeURIComponent(storylineId)}/pending-semantic-frames/${encodeURIComponent(frameId)}/confirm`,
+    { userReply: 'manual_confirm' },
+  );
+}
+
+export function cancelPendingSemanticFrame(storylineId: string, frameId: string) {
+  return apiPost<PendingSemanticFrame>(
+    `/api/storylines/${encodeURIComponent(storylineId)}/pending-semantic-frames/${encodeURIComponent(frameId)}/cancel`,
+    { userReply: 'manual_cancel' },
+  );
 }
 
 export function fetchActivityLogs(storylineId: string) {
