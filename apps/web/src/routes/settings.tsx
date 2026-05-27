@@ -579,10 +579,10 @@ function SettingsSidebarNav({
       data-state={state}
       className={cn(
         'companion-glass relative z-30 hidden h-full shrink-0 flex-col rounded-[var(--settings-surface-radius)] text-foreground shadow-[0_24px_64px_-36px_var(--companion-glass-shadow)] transition-[width] duration-200 ease-linear md:flex',
-        collapsed ? 'w-16' : 'w-[var(--sidebar-width)]',
+        collapsed ? 'w-[calc(16*(var(--spacing))+2px)]' : 'w-[var(--sidebar-width)]',
       )}
     >
-      <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 p-2">
 
         <nav className="flex flex-col gap-2">
           {SETTINGS_SECTIONS.map((section) => {
@@ -602,7 +602,7 @@ function SettingsSidebarNav({
                 )}
                 onClick={() => handleSectionSelect(section.id)}
               >
-                <span className="grid h-10 w-10 shrink-0 place-items-center">
+                <span className="grid h-12 w-12 shrink-0 place-items-center">
                   <Icon className="h-5 w-5" />
                 </span>
                 <span
