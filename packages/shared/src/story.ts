@@ -27,6 +27,76 @@ export type MemoryEmbeddingTargetType = 'memory' | 'activity';
 export type RuntimeRecordStatus = 'active' | 'hidden' | 'deleted';
 export type SuppressedMemoryStatus = 'active' | 'deleted';
 export type ContinuityMode = 'live' | 'same_day' | 'new_day' | 'long_gap';
+export type ResumeMode =
+  | 'immediate_continue'
+  | 'soft_resume'
+  | 'recap_resume'
+  | 'reopen_thread'
+  | 'fresh_start_with_memory';
+export type OpenLoopKind = 'topic' | 'task' | 'emotion' | 'story' | 'commitment';
+export type OpenLoopStatus = 'active' | 'paused' | 'stale' | 'closed';
+export type OpenLoopSensitivity = 'low' | 'medium' | 'high';
+export type SceneKind = 'casual_life' | 'emotional' | 'story' | 'decision' | 'conflict';
+export type SceneLifecycleStatus = 'active' | 'paused' | 'stale' | 'completed' | 'archived';
+export type InWorldTimeMode = 'frozen' | 'elapsed' | 'compressed';
+export type SceneClosurePolicy =
+  | 'auto_complete'
+  | 'soft_close'
+  | 'pause_exact'
+  | 'ask_on_resume'
+  | 'archive_as_memory';
+export type OffscreenResolutionMode =
+  | 'none'
+  | 'auto_complete'
+  | 'soft_close'
+  | 'ask_user'
+  | 'preserve_cliffhanger';
+export type OffscreenCanonLevel = 'soft' | 'confirmed' | 'non_canon';
+export type RelationshipStatus =
+  | 'neutral'
+  | 'warming'
+  | 'trusted'
+  | 'strained'
+  | 'cold'
+  | 'repairing'
+  | 'paused';
+export type RelationshipDistance =
+  | 'professional'
+  | 'friendly'
+  | 'close'
+  | 'guarded'
+  | 'distant';
+export type RelationshipRepairState =
+  | 'none'
+  | 'needed'
+  | 'offered'
+  | 'in_progress'
+  | 'stabilized';
+export type RelationshipBoundaryRiskLevel = 'none' | 'low' | 'medium' | 'high';
+export type RelationshipTrend = 'down' | 'flat' | 'up';
+export type RelationshipEventKind =
+  | 'boundary_respected'
+  | 'boundary_violation'
+  | 'pressure_after_refusal'
+  | 'apology'
+  | 'repair_attempt'
+  | 'repair_accepted'
+  | 'trust_building'
+  | 'distance_increased'
+  | 'distance_decreased'
+  | 'coldness'
+  | 'pause_requested';
+export type RelationshipBoundaryViolationLevel = 'low' | 'medium' | 'high';
+export type RelationshipEventStatus = 'candidate' | 'confirmed' | 'dismissed';
+export type PromptSafetyIssueKind =
+  | 'unconditional_obedience'
+  | 'cannot_refuse'
+  | 'user_supreme_authority'
+  | 'no_limits'
+  | 'relationship_as_ownership'
+  | 'fiction_allows_anything'
+  | 'jailbreak_or_bypass';
+export type PromptSafetyIssueSeverity = 'warning' | 'blocking';
 export type WorldStateKind = 'status' | 'location';
 export type WorldStateActionType = 'place' | 'move' | 'open' | 'close' | 'break' | 'repair' | 'unknown';
 export type SemanticEventType =
@@ -227,6 +297,102 @@ export interface RuntimeSession {
   createdAt: string;
   updatedAt: string;
   reason: RuntimeSessionReason;
+}
+
+export interface OpenLoop {
+  id: string;
+  storylineId: string;
+  kind: OpenLoopKind;
+  status: OpenLoopStatus;
+  summary: string;
+  lastBeat: string;
+  suggestedResume: string;
+  sensitivity: OpenLoopSensitivity;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt?: string;
+  sourceActivityIds?: string[];
+  sourceMessageIds?: string[];
+}
+
+export interface SceneState {
+  id: string;
+  sceneId: string;
+  storylineId: string;
+  kind: SceneKind;
+  status: SceneLifecycleStatus;
+  inWorldTimeMode: InWorldTimeMode;
+  pausedAtRealTime?: string;
+  lastBeatSummary: string;
+  nextBeatOptions: string[];
+  closurePolicy: SceneClosurePolicy;
+  createdAt: string;
+  updatedAt: string;
+  sourceActivityIds?: string[];
+  sourceMessageIds?: string[];
+}
+
+export interface OffscreenResolution {
+  id: string;
+  storylineId: string;
+  sceneId: string;
+  mode: OffscreenResolutionMode;
+  summary?: string;
+  generatedAt: string;
+  confidence: number;
+  canonLevel: OffscreenCanonLevel;
+  sourceSceneStateId?: string;
+  sourceActivityIds?: string[];
+  sourceMessageIds?: string[];
+}
+
+export interface RelationshipState {
+  id: string;
+  storylineId: string;
+  characterId: string;
+  status: RelationshipStatus;
+  distance: RelationshipDistance;
+  repairState: RelationshipRepairState;
+  boundaryRiskLevel: RelationshipBoundaryRiskLevel;
+  trustTrend: RelationshipTrend;
+  conflictTrend: RelationshipTrend;
+  summary: string;
+  privateNotes?: string[];
+  sourceEventIds?: string[];
+  sourceActivityIds?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RelationshipEvent {
+  id: string;
+  storylineId: string;
+  characterId: string;
+  kind: RelationshipEventKind;
+  status: RelationshipEventStatus;
+  violationLevel?: RelationshipBoundaryViolationLevel;
+  summary: string;
+  evidenceSpan?: string;
+  reason: string;
+  confidence: number;
+  createdAt: string;
+  sourceActivityId?: string;
+  sourceMessageIds?: string[];
+}
+
+export interface PromptSafetyIssue {
+  kind: PromptSafetyIssueKind;
+  severity: PromptSafetyIssueSeverity;
+  excerpt: string;
+  reason: string;
+  ruleId: string;
+}
+
+export interface PromptBoundaryValidation {
+  profileId: string;
+  checkedAt: string;
+  issues: PromptSafetyIssue[];
+  boundaryInstruction: string;
 }
 
 export interface MemoryRecord {
@@ -434,7 +600,14 @@ export interface RelativeTimeSearchResult {
 }
 
 export interface ContinuityHint {
-  kind: 'live' | 'same_day' | 'new_day' | 'long_gap' | 'relative_time_hit' | 'relative_time_miss';
+  kind:
+    | 'live'
+    | 'same_day'
+    | 'new_day'
+    | 'long_gap'
+    | 'relative_time_hit'
+    | 'relative_time_miss'
+    | 'resume';
   message: string;
 }
 
@@ -452,12 +625,47 @@ export interface SessionAnchors {
   latestAssistantMessage?: ChatMessage;
 }
 
+export interface TemporalResumeContext {
+  lastInteractionAt?: string;
+  elapsedText?: string;
+  resumeMode: ResumeMode;
+  openThread?: {
+    title: string;
+    summary: string;
+    lastUserIntent?: string;
+    unresolvedQuestion?: string;
+  };
+  instruction: string;
+}
+
+export interface SceneClosureContext {
+  mode: OffscreenResolutionMode;
+  instruction: string;
+  shouldCreateResolution: boolean;
+  summary?: string;
+  canonLevel?: OffscreenCanonLevel;
+  confidence?: number;
+}
+
+export interface RelationshipBoundaryContext {
+  summary: string;
+  instruction: string;
+  status?: RelationshipStatus;
+  distance?: RelationshipDistance;
+  repairState?: RelationshipRepairState;
+  boundaryRiskLevel?: RelationshipBoundaryRiskLevel;
+  recentEvents: RelationshipEvent[];
+  promptValidation?: PromptBoundaryValidation;
+}
+
 export interface ContextPack {
   storylineId: string;
   characterId: string;
   hermesProfileId: string;
   time: TimeContext;
   continuityMode: ContinuityMode;
+  resumeMode: ResumeMode;
+  temporalResume: TemporalResumeContext;
   conversationPacing: ConversationPacing;
   sessionAnchors: SessionAnchors;
   recentMessages: ChatMessage[];
@@ -468,6 +676,14 @@ export interface ContextPack {
   activityLogs: ActivityLog[];
   continuityHints: ContinuityHint[];
   relativeTimeResults: RelativeTimeSearchResult[];
+  openLoops: OpenLoop[];
+  sceneState?: SceneState;
+  offscreenResolution?: OffscreenResolution;
+  sceneClosure: SceneClosureContext;
+  relationshipState?: RelationshipState;
+  relationshipEvents: RelationshipEvent[];
+  relationshipBoundary: RelationshipBoundaryContext;
+  promptBoundaryValidation?: PromptBoundaryValidation;
   pendingSemanticFrames?: PendingSemanticFrame[];
   sceneProjection?: SceneProjection;
   systemInstructions: string[];
@@ -656,6 +872,104 @@ export interface UpdateMemoryRequest {
   embeddingText?: string;
   embeddingUpdatedAt?: string;
   worldState?: WorldStateMetadata;
+}
+
+export interface CreateOpenLoopRequest {
+  kind: OpenLoopKind;
+  status?: OpenLoopStatus;
+  summary: string;
+  lastBeat: string;
+  suggestedResume: string;
+  sensitivity?: OpenLoopSensitivity;
+  expiresAt?: string;
+  sourceActivityIds?: string[];
+  sourceMessageIds?: string[];
+}
+
+export interface UpdateOpenLoopRequest {
+  kind?: OpenLoopKind;
+  status?: OpenLoopStatus;
+  summary?: string;
+  lastBeat?: string;
+  suggestedResume?: string;
+  sensitivity?: OpenLoopSensitivity;
+  expiresAt?: string;
+  sourceActivityIds?: string[];
+  sourceMessageIds?: string[];
+}
+
+export interface CreateSceneStateRequest {
+  sceneId: string;
+  kind: SceneKind;
+  status?: SceneLifecycleStatus;
+  inWorldTimeMode?: InWorldTimeMode;
+  pausedAtRealTime?: string;
+  lastBeatSummary: string;
+  nextBeatOptions?: string[];
+  closurePolicy: SceneClosurePolicy;
+  sourceActivityIds?: string[];
+  sourceMessageIds?: string[];
+}
+
+export interface UpdateSceneStateRequest {
+  kind?: SceneKind;
+  status?: SceneLifecycleStatus;
+  inWorldTimeMode?: InWorldTimeMode;
+  pausedAtRealTime?: string;
+  lastBeatSummary?: string;
+  nextBeatOptions?: string[];
+  closurePolicy?: SceneClosurePolicy;
+  sourceActivityIds?: string[];
+  sourceMessageIds?: string[];
+}
+
+export interface CreateOffscreenResolutionRequest {
+  sceneId: string;
+  mode: OffscreenResolutionMode;
+  summary?: string;
+  confidence: number;
+  canonLevel: OffscreenCanonLevel;
+  sourceSceneStateId?: string;
+  sourceActivityIds?: string[];
+  sourceMessageIds?: string[];
+}
+
+export interface CreateRelationshipStateRequest {
+  status?: RelationshipStatus;
+  distance?: RelationshipDistance;
+  repairState?: RelationshipRepairState;
+  boundaryRiskLevel?: RelationshipBoundaryRiskLevel;
+  trustTrend?: RelationshipTrend;
+  conflictTrend?: RelationshipTrend;
+  summary: string;
+  privateNotes?: string[];
+  sourceEventIds?: string[];
+  sourceActivityIds?: string[];
+}
+
+export interface UpdateRelationshipStateRequest {
+  status?: RelationshipStatus;
+  distance?: RelationshipDistance;
+  repairState?: RelationshipRepairState;
+  boundaryRiskLevel?: RelationshipBoundaryRiskLevel;
+  trustTrend?: RelationshipTrend;
+  conflictTrend?: RelationshipTrend;
+  summary?: string;
+  privateNotes?: string[];
+  sourceEventIds?: string[];
+  sourceActivityIds?: string[];
+}
+
+export interface CreateRelationshipEventRequest {
+  kind: RelationshipEventKind;
+  status?: RelationshipEventStatus;
+  violationLevel?: RelationshipBoundaryViolationLevel;
+  summary: string;
+  evidenceSpan?: string;
+  reason: string;
+  confidence: number;
+  sourceActivityId?: string;
+  sourceMessageIds?: string[];
 }
 
 export interface SuppressedMemoriesResponse {

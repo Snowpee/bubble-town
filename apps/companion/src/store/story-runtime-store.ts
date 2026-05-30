@@ -6,10 +6,20 @@ import type {
   CreateActivityLogRequest,
   CreateCharacterRequest,
   CreateMemoryRequest,
+  CreateOffscreenResolutionRequest,
+  CreateOpenLoopRequest,
+  CreateRelationshipEventRequest,
+  CreateRelationshipStateRequest,
+  CreateSceneStateRequest,
   CreateStorylineRequest,
   CreateSuppressedMemoryRequest,
   MemoryRecord,
   MemoryCandidate,
+  OffscreenResolution,
+  OpenLoop,
+  RelationshipEvent,
+  RelationshipState,
+  SceneState,
   SemanticEvent,
   PendingSemanticFrame,
   PendingSemanticFrameKind,
@@ -20,6 +30,9 @@ import type {
   UpdateActivityLogRequest,
   UpdateCharacterRequest,
   UpdateMemoryRequest,
+  UpdateOpenLoopRequest,
+  UpdateRelationshipStateRequest,
+  UpdateSceneStateRequest,
   UpdateStorylineRequest,
 } from '@bubble-town/shared';
 import {
@@ -37,7 +50,12 @@ import {
   selectCharacters,
   selectMemoryRecordById,
   selectMemoryRecords,
+  selectOffscreenResolutions,
+  selectOpenLoops,
+  selectRelationshipEvents,
+  selectRelationshipStates,
   selectRuntimeSessionForStoryline,
+  selectSceneStates,
   selectStorylineById,
   selectStorylines,
   selectSuppressedMemories,
@@ -559,6 +577,263 @@ export function listPendingSemanticFrames(storylineId: string): PendingSemanticF
   return selectPendingSemanticFrames(readData(), storylineId);
 }
 
+export function listOpenLoops(storylineId: string): OpenLoop[] {
+  return selectOpenLoops(readData(), storylineId);
+}
+
+export function createOpenLoop(storylineId: string, input: CreateOpenLoopRequest): OpenLoop {
+  if (!getStoryline(storylineId)) {
+    throw new Error('未找到目标剧情。');
+  }
+  const summary = input.summary.trim();
+  const lastBeat = input.lastBeat.trim();
+  const suggestedResume = input.suggestedResume.trim();
+  if (!summary || !lastBeat || !suggestedResume) {
+    throw new Error('OpenLoop 摘要、最后节拍和恢复建议不能为空。');
+  }
+  const data = readData();
+  const now = nowIso();
+  const openLoop: OpenLoop = {
+    id: createId('open_loop'),
+    storylineId,
+    kind: input.kind,
+    status: input.status ?? 'active',
+    summary,
+    lastBeat,
+    suggestedResume,
+    sensitivity: input.sensitivity ?? 'medium',
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: input.expiresAt,
+    sourceActivityIds: input.sourceActivityIds,
+    sourceMessageIds: input.sourceMessageIds,
+  };
+  data.openLoops.push(openLoop);
+  writeData(data);
+  return openLoop;
+}
+
+export function updateOpenLoop(id: string, input: UpdateOpenLoopRequest): OpenLoop | undefined {
+  const data = readData();
+  const index = data.openLoops.findIndex((loop) => loop.id === id);
+  if (index === -1) {
+    return undefined;
+  }
+  const current = data.openLoops[index]!;
+  const updated: OpenLoop = {
+    ...current,
+    kind: input.kind ?? current.kind,
+    status: input.status ?? current.status,
+    summary: input.summary === undefined ? current.summary : input.summary.trim() || current.summary,
+    lastBeat: input.lastBeat === undefined ? current.lastBeat : input.lastBeat.trim() || current.lastBeat,
+    suggestedResume: input.suggestedResume === undefined ? current.suggestedResume : input.suggestedResume.trim() || current.suggestedResume,
+    sensitivity: input.sensitivity ?? current.sensitivity,
+    expiresAt: input.expiresAt === undefined ? current.expiresAt : input.expiresAt,
+    sourceActivityIds: input.sourceActivityIds ?? current.sourceActivityIds,
+    sourceMessageIds: input.sourceMessageIds ?? current.sourceMessageIds,
+    updatedAt: nowIso(),
+  };
+  data.openLoops[index] = updated;
+  writeData(data);
+  return updated;
+}
+
+export function listSceneStates(storylineId: string): SceneState[] {
+  return selectSceneStates(readData(), storylineId);
+}
+
+export function createSceneState(storylineId: string, input: CreateSceneStateRequest): SceneState {
+  if (!getStoryline(storylineId)) {
+    throw new Error('未找到目标剧情。');
+  }
+  const sceneId = input.sceneId.trim();
+  const lastBeatSummary = input.lastBeatSummary.trim();
+  if (!sceneId || !lastBeatSummary) {
+    throw new Error('SceneState 的 sceneId 和 lastBeatSummary 不能为空。');
+  }
+  const data = readData();
+  const now = nowIso();
+  const sceneState: SceneState = {
+    id: createId('scene_state'),
+    storylineId,
+    sceneId,
+    kind: input.kind,
+    status: input.status ?? 'active',
+    inWorldTimeMode: input.inWorldTimeMode ?? 'compressed',
+    pausedAtRealTime: input.pausedAtRealTime,
+    lastBeatSummary,
+    nextBeatOptions: input.nextBeatOptions ?? [],
+    closurePolicy: input.closurePolicy,
+    createdAt: now,
+    updatedAt: now,
+    sourceActivityIds: input.sourceActivityIds,
+    sourceMessageIds: input.sourceMessageIds,
+  };
+  data.sceneStates.push(sceneState);
+  writeData(data);
+  return sceneState;
+}
+
+export function updateSceneState(id: string, input: UpdateSceneStateRequest): SceneState | undefined {
+  const data = readData();
+  const index = data.sceneStates.findIndex((state) => state.id === id);
+  if (index === -1) {
+    return undefined;
+  }
+  const current = data.sceneStates[index]!;
+  const updated: SceneState = {
+    ...current,
+    kind: input.kind ?? current.kind,
+    status: input.status ?? current.status,
+    inWorldTimeMode: input.inWorldTimeMode ?? current.inWorldTimeMode,
+    pausedAtRealTime: input.pausedAtRealTime === undefined ? current.pausedAtRealTime : input.pausedAtRealTime,
+    lastBeatSummary: input.lastBeatSummary === undefined ? current.lastBeatSummary : input.lastBeatSummary.trim() || current.lastBeatSummary,
+    nextBeatOptions: input.nextBeatOptions ?? current.nextBeatOptions,
+    closurePolicy: input.closurePolicy ?? current.closurePolicy,
+    sourceActivityIds: input.sourceActivityIds ?? current.sourceActivityIds,
+    sourceMessageIds: input.sourceMessageIds ?? current.sourceMessageIds,
+    updatedAt: nowIso(),
+  };
+  data.sceneStates[index] = updated;
+  writeData(data);
+  return updated;
+}
+
+export function listOffscreenResolutions(storylineId: string): OffscreenResolution[] {
+  return selectOffscreenResolutions(readData(), storylineId);
+}
+
+export function createOffscreenResolution(
+  storylineId: string,
+  input: CreateOffscreenResolutionRequest,
+): OffscreenResolution {
+  if (!getStoryline(storylineId)) {
+    throw new Error('未找到目标剧情。');
+  }
+  const sceneId = input.sceneId.trim();
+  if (!sceneId) {
+    throw new Error('OffscreenResolution 的 sceneId 不能为空。');
+  }
+  const data = readData();
+  const resolution: OffscreenResolution = {
+    id: createId('offscreen_resolution'),
+    storylineId,
+    sceneId,
+    mode: input.mode,
+    summary: input.summary?.trim() || undefined,
+    generatedAt: nowIso(),
+    confidence: Math.max(0, Math.min(1, input.confidence)),
+    canonLevel: input.canonLevel,
+    sourceSceneStateId: input.sourceSceneStateId,
+    sourceActivityIds: input.sourceActivityIds,
+    sourceMessageIds: input.sourceMessageIds,
+  };
+  data.offscreenResolutions.push(resolution);
+  writeData(data);
+  return resolution;
+}
+
+export function listRelationshipStates(storylineId: string): RelationshipState[] {
+  return selectRelationshipStates(readData(), storylineId);
+}
+
+export function createRelationshipState(storylineId: string, input: CreateRelationshipStateRequest): RelationshipState {
+  const storyline = getStoryline(storylineId);
+  if (!storyline) {
+    throw new Error('未找到目标剧情。');
+  }
+  const summary = input.summary.trim();
+  if (!summary) {
+    throw new Error('RelationshipState 的 summary 不能为空。');
+  }
+  const data = readData();
+  const now = nowIso();
+  const state: RelationshipState = {
+    id: createId('relationship_state'),
+    storylineId,
+    characterId: storyline.characterId,
+    status: input.status ?? 'neutral',
+    distance: input.distance ?? 'professional',
+    repairState: input.repairState ?? 'none',
+    boundaryRiskLevel: input.boundaryRiskLevel ?? 'none',
+    trustTrend: input.trustTrend ?? 'flat',
+    conflictTrend: input.conflictTrend ?? 'flat',
+    summary,
+    privateNotes: input.privateNotes,
+    sourceEventIds: input.sourceEventIds,
+    sourceActivityIds: input.sourceActivityIds,
+    createdAt: now,
+    updatedAt: now,
+  };
+  data.relationshipStates.push(state);
+  writeData(data);
+  return state;
+}
+
+export function updateRelationshipState(
+  id: string,
+  input: UpdateRelationshipStateRequest,
+): RelationshipState | undefined {
+  const data = readData();
+  const index = data.relationshipStates.findIndex((state) => state.id === id);
+  if (index === -1) {
+    return undefined;
+  }
+  const current = data.relationshipStates[index]!;
+  const updated: RelationshipState = {
+    ...current,
+    status: input.status ?? current.status,
+    distance: input.distance ?? current.distance,
+    repairState: input.repairState ?? current.repairState,
+    boundaryRiskLevel: input.boundaryRiskLevel ?? current.boundaryRiskLevel,
+    trustTrend: input.trustTrend ?? current.trustTrend,
+    conflictTrend: input.conflictTrend ?? current.conflictTrend,
+    summary: input.summary === undefined ? current.summary : input.summary.trim() || current.summary,
+    privateNotes: input.privateNotes ?? current.privateNotes,
+    sourceEventIds: input.sourceEventIds ?? current.sourceEventIds,
+    sourceActivityIds: input.sourceActivityIds ?? current.sourceActivityIds,
+    updatedAt: nowIso(),
+  };
+  data.relationshipStates[index] = updated;
+  writeData(data);
+  return updated;
+}
+
+export function listRelationshipEvents(storylineId: string): RelationshipEvent[] {
+  return selectRelationshipEvents(readData(), storylineId);
+}
+
+export function createRelationshipEvent(storylineId: string, input: CreateRelationshipEventRequest): RelationshipEvent {
+  const storyline = getStoryline(storylineId);
+  if (!storyline) {
+    throw new Error('未找到目标剧情。');
+  }
+  const summary = input.summary.trim();
+  const reason = input.reason.trim();
+  if (!summary || !reason) {
+    throw new Error('RelationshipEvent 的 summary 和 reason 不能为空。');
+  }
+  const data = readData();
+  const event: RelationshipEvent = {
+    id: createId('relationship_event'),
+    storylineId,
+    characterId: storyline.characterId,
+    kind: input.kind,
+    status: input.status ?? (input.confidence >= 0.78 ? 'confirmed' : 'candidate'),
+    violationLevel: input.violationLevel,
+    summary,
+    evidenceSpan: input.evidenceSpan?.trim() || undefined,
+    reason,
+    confidence: Math.max(0, Math.min(1, input.confidence)),
+    createdAt: nowIso(),
+    sourceActivityId: input.sourceActivityId,
+    sourceMessageIds: input.sourceMessageIds,
+  };
+  data.relationshipEvents.push(event);
+  writeData(data);
+  return event;
+}
+
 export function createPendingSemanticFrame(input: {
   storylineId: string;
   kind: PendingSemanticFrameKind;
@@ -699,6 +974,11 @@ export function resetProfileRuntimeState(profileId: string): {
   removedSuppressedMemoryCount: number;
   removedActivityLogCount: number;
   removedPendingSemanticFrameCount: number;
+  removedOpenLoopCount: number;
+  removedSceneStateCount: number;
+  removedOffscreenResolutionCount: number;
+  removedRelationshipStateCount: number;
+  removedRelationshipEventCount: number;
   removedCharacterCount: number;
 } {
   const targetProfileId = profileId.trim();
@@ -711,6 +991,11 @@ export function resetProfileRuntimeState(profileId: string): {
       removedSuppressedMemoryCount: 0,
       removedActivityLogCount: 0,
       removedPendingSemanticFrameCount: 0,
+      removedOpenLoopCount: 0,
+      removedSceneStateCount: 0,
+      removedOffscreenResolutionCount: 0,
+      removedRelationshipStateCount: 0,
+      removedRelationshipEventCount: 0,
       removedCharacterCount: 0,
     };
   }
@@ -733,6 +1018,11 @@ export function resetProfileRuntimeState(profileId: string): {
   const nextSuppressedMemories = data.suppressedMemories.filter((memory) => !storylineIdSet.has(memory.storylineId ?? ''));
   const nextActivityLogs = data.activityLogs.filter((activityLog) => !storylineIdSet.has(activityLog.storylineId));
   const nextPendingSemanticFrames = data.pendingSemanticFrames.filter((frame) => !storylineIdSet.has(frame.storylineId));
+  const nextOpenLoops = data.openLoops.filter((loop) => !storylineIdSet.has(loop.storylineId));
+  const nextSceneStates = data.sceneStates.filter((state) => !storylineIdSet.has(state.storylineId));
+  const nextOffscreenResolutions = data.offscreenResolutions.filter((resolution) => !storylineIdSet.has(resolution.storylineId));
+  const nextRelationshipStates = data.relationshipStates.filter((state) => !storylineIdSet.has(state.storylineId));
+  const nextRelationshipEvents = data.relationshipEvents.filter((event) => !storylineIdSet.has(event.storylineId));
   const usedCharacterIds = new Set(nextStorylines.map((storyline) => storyline.characterId));
   const nextCharacters = data.characters.filter((character) => !characterIdSet.has(character.id) || usedCharacterIds.has(character.id));
   const nextActiveStorylineId = data.activeStorylineId && storylineIdSet.has(data.activeStorylineId)
@@ -745,6 +1035,11 @@ export function resetProfileRuntimeState(profileId: string): {
   const removedSuppressedMemoryCount = data.suppressedMemories.length - nextSuppressedMemories.length;
   const removedActivityLogCount = data.activityLogs.length - nextActivityLogs.length;
   const removedPendingSemanticFrameCount = data.pendingSemanticFrames.length - nextPendingSemanticFrames.length;
+  const removedOpenLoopCount = data.openLoops.length - nextOpenLoops.length;
+  const removedSceneStateCount = data.sceneStates.length - nextSceneStates.length;
+  const removedOffscreenResolutionCount = data.offscreenResolutions.length - nextOffscreenResolutions.length;
+  const removedRelationshipStateCount = data.relationshipStates.length - nextRelationshipStates.length;
+  const removedRelationshipEventCount = data.relationshipEvents.length - nextRelationshipEvents.length;
   const removedCharacterCount = data.characters.length - nextCharacters.length;
 
   if (
@@ -754,6 +1049,11 @@ export function resetProfileRuntimeState(profileId: string): {
     || removedSuppressedMemoryCount > 0
     || removedActivityLogCount > 0
     || removedPendingSemanticFrameCount > 0
+    || removedOpenLoopCount > 0
+    || removedSceneStateCount > 0
+    || removedOffscreenResolutionCount > 0
+    || removedRelationshipStateCount > 0
+    || removedRelationshipEventCount > 0
     || removedCharacterCount > 0
     || nextActiveStorylineId !== data.activeStorylineId
   ) {
@@ -767,6 +1067,11 @@ export function resetProfileRuntimeState(profileId: string): {
       suppressedMemories: nextSuppressedMemories,
       activityLogs: nextActivityLogs,
       pendingSemanticFrames: nextPendingSemanticFrames,
+      openLoops: nextOpenLoops,
+      sceneStates: nextSceneStates,
+      offscreenResolutions: nextOffscreenResolutions,
+      relationshipStates: nextRelationshipStates,
+      relationshipEvents: nextRelationshipEvents,
     });
   }
 
@@ -778,6 +1083,11 @@ export function resetProfileRuntimeState(profileId: string): {
     removedSuppressedMemoryCount,
     removedActivityLogCount,
     removedPendingSemanticFrameCount,
+    removedOpenLoopCount,
+    removedSceneStateCount,
+    removedOffscreenResolutionCount,
+    removedRelationshipStateCount,
+    removedRelationshipEventCount,
     removedCharacterCount,
   };
 }

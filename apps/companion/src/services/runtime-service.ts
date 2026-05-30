@@ -2,13 +2,20 @@ import type {
   ActivityLog,
   Character,
   MemoryRecord,
+  OffscreenResolution,
+  OpenLoop,
   PendingSemanticFrame,
+  PromptBoundaryValidation,
+  RelationshipEvent,
+  RelationshipState,
   RuntimeSession,
   SceneProjection,
+  SceneState,
   Storyline,
   SuppressedMemory,
 } from '@bubble-town/shared';
 import { buildSceneProjectionFromMemories, getStorylineSceneId } from '../features/world-state/world-state.js';
+import { validateProfileBoundaryForProfile } from '../features/story/prompt-boundary-validation.js';
 import { markMemoryRecordsAccessed } from '../store/story-runtime-store.js';
 import {
   getStoryRuntimeRepository,
@@ -21,7 +28,12 @@ import {
   selectCharacterById,
   selectMemoryRecordById,
   selectMemoryRecords,
+  selectOffscreenResolutionForScene,
+  selectOpenLoops,
+  selectRelationshipEvents,
+  selectRelationshipStateForStoryline,
   selectRuntimeSessionForStoryline,
+  selectSceneStateForScene,
   selectStorylineById,
   selectStorylines,
   selectSuppressedMemories,
@@ -39,6 +51,12 @@ export interface StorylineRuntimeContext {
   activityLogs: ActivityLog[];
   allActivityLogs: ActivityLog[];
   pendingSemanticFrames: PendingSemanticFrame[];
+  openLoops: OpenLoop[];
+  sceneState?: SceneState;
+  offscreenResolution?: OffscreenResolution;
+  relationshipState?: RelationshipState;
+  relationshipEvents: RelationshipEvent[];
+  promptBoundaryValidation?: PromptBoundaryValidation;
   sceneProjection?: SceneProjection;
 }
 
@@ -81,6 +99,7 @@ export function getStorylineRuntimeContextFromSnapshot(
   }
 
   const allMemoryRecords = selectAllMemoryRecords(snapshot, storyline.id);
+  const sceneId = getStorylineSceneId(storyline);
   return {
     snapshot,
     storyline,
@@ -94,7 +113,13 @@ export function getStorylineRuntimeContextFromSnapshot(
       .slice(0, 20),
     allActivityLogs: selectAllActivityLogs(snapshot, storyline.id),
     pendingSemanticFrames: selectPendingSemanticFrames(snapshot, storyline.id),
-    sceneProjection: buildSceneProjectionFromMemories(allMemoryRecords, getStorylineSceneId(storyline)),
+    openLoops: selectOpenLoops(snapshot, storyline.id),
+    sceneState: selectSceneStateForScene(snapshot, storyline.id, sceneId),
+    offscreenResolution: selectOffscreenResolutionForScene(snapshot, storyline.id, sceneId),
+    relationshipState: selectRelationshipStateForStoryline(snapshot, storyline.id, character.id),
+    relationshipEvents: selectRelationshipEvents(snapshot, storyline.id).slice(0, 8),
+    promptBoundaryValidation: validateProfileBoundaryForProfile(storyline.hermesProfileId),
+    sceneProjection: buildSceneProjectionFromMemories(allMemoryRecords, sceneId),
   };
 }
 

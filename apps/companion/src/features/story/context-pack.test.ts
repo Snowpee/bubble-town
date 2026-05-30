@@ -3,21 +3,40 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildContextPack, buildTimeContext, renderContextPackInstructions } from './context-pack.js';
+import { buildContextPack, buildTimeContext, renderContextPackInstructions, resolveResumeMode } from './context-pack.js';
 import { recordStorylineTurnContinuity } from './story-memory-continuity.js';
 import {
   createActivityLog,
   createCharacter,
   createMemoryRecord,
+  createOpenLoop,
+  createPendingSemanticFrame,
+  createRelationshipEvent,
+  createRelationshipState,
+  createSceneState,
   createStoryline,
   createSuppressedMemory,
+  listAllActivityLogs,
   listAllMemoryRecords,
+  listOffscreenResolutions,
+  listRelationshipEvents,
+  listRelationshipStates,
   resetStoryRuntimeForTests,
   updateActivityLog,
   updateMemoryRecord,
   touchStorylineInteraction,
   upsertRuntimeSession,
 } from '../../store/story-runtime-store.js';
+
+test('resolveResumeMode 根据间隔返回恢复模式', () => {
+  const now = new Date('2026-05-31T12:00:00.000Z');
+
+  assert.equal(resolveResumeMode('2026-05-31T11:30:00.000Z', now), 'immediate_continue');
+  assert.equal(resolveResumeMode('2026-05-31T00:30:00.000Z', now), 'soft_resume');
+  assert.equal(resolveResumeMode('2026-05-30T10:00:00.000Z', now), 'recap_resume');
+  assert.equal(resolveResumeMode('2026-05-27T12:00:00.000Z', now), 'reopen_thread');
+  assert.equal(resolveResumeMode('2026-05-20T12:00:00.000Z', now), 'fresh_start_with_memory');
+});
 
 function createHermesHome() {
   const hermesHome = fs.mkdtempSync(path.join(os.tmpdir(), 'bubble-town-context-pack-'));
@@ -69,6 +88,116 @@ test('ContextPack 只包含当前 Storyline 基础信息并可渲染 instruction
     assert.match(rendered, /localNow: \d{4}-\d{2}-\d{2} \d{2}:\d{2}/);
     assert.match(rendered, /localTime: \d{2}:\d{2}/);
     assert.match(rendered, /authoritative_time/);
+    assert.equal(contextPack.resumeMode, 'immediate_continue');
+    assert.match(rendered, /resumeMode: immediate_continue/);
+    assert.match(rendered, /temporalResume:/);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('ContextPack 注入 OpenLoop 和 temporal resume context', () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-001',
+      title: '未完成话题',
+    });
+    touchStorylineInteraction(storyline.id, new Date(Date.now() - 30 * 60 * 60 * 1000).toISOString());
+    const activity = createActivityLog(storyline.id, {
+      summary: '用户和 Sami 讨论如何让未结束的对话自然落幕。',
+      tags: ['test'],
+    });
+    createOpenLoop(storyline.id, {
+      kind: 'topic',
+      summary: '未结束的对话如何自然落幕',
+      lastBeat: '用户在整理 Temporal Continuity 的设计问题。',
+      suggestedResume: '先简短回顾时间连续性，再继续具体实现。',
+      sensitivity: 'medium',
+      sourceActivityIds: [activity.id],
+    });
+
+    const contextPack = buildContextPack(storyline.id, { input: '继续' });
+    const rendered = renderContextPackInstructions(contextPack);
+
+    assert.equal(contextPack.resumeMode, 'recap_resume');
+    assert.equal(contextPack.openLoops.length, 1);
+    assert.equal(contextPack.temporalResume.openThread?.summary, '未结束的对话如何自然落幕');
+    assert.match(rendered, /openLoops:/);
+    assert.match(rendered, /未结束的对话如何自然落幕/);
+    assert.match(rendered, /先用一句简短摘要找回上次上下文/);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('ContextPack 将 pending semantic frame 作为高优先级 OpenLoop 注入', () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-001',
+      title: '待确认承诺',
+    });
+    createPendingSemanticFrame({
+      storylineId: storyline.id,
+      kind: 'commitment_confirm',
+      prompt: '确认用户是否真的要把周五晚饭作为固定约定。',
+      candidate: {
+        kind: 'commitment',
+        content: '用户可能提出周五晚饭固定约定。',
+        scope: 'story',
+        importance: 0.8,
+        confidence: 0.64,
+        lifespan: 'long_term',
+        source: 'auto_extract',
+        reason: '用户表达了可能的承诺，但需要确认。',
+        shouldPersist: true,
+        confirmationRequired: true,
+      },
+    });
+
+    const contextPack = buildContextPack(storyline.id, { input: '嗯' });
+    const rendered = renderContextPackInstructions(contextPack);
+
+    assert.equal(contextPack.openLoops[0]?.kind, 'commitment');
+    assert.equal(contextPack.openLoops[0]?.sensitivity, 'high');
+    assert.match(rendered, /待确认语义/);
+    assert.match(rendered, /确认用户是否真的要把周五晚饭作为固定约定/);
+    assert.match(rendered, /pendingSemanticFrames 表示当前存在待确认的跨轮语义/);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('ContextPack 长间隔恢复禁止等待债原句并允许新话题', () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-001',
+      title: '长间隔恢复',
+    });
+    touchStorylineInteraction(storyline.id, new Date(Date.now() - 9 * 24 * 60 * 60 * 1000).toISOString());
+
+    const contextPack = buildContextPack(storyline.id, { input: '帮我看一下今天的计划' });
+    const rendered = renderContextPackInstructions(contextPack);
+
+    assert.equal(contextPack.resumeMode, 'fresh_start_with_memory');
+    assert.match(rendered, /旧线索只作为背景记忆/);
+    assert.match(rendered, /优先回应用户当前输入/);
+    assert.doesNotMatch(rendered, /我一直在等你/);
+    assert.doesNotMatch(rendered, /你终于回来了/);
+    assert.doesNotMatch(rendered, /你怎么这么久才来/);
+    assert.doesNotMatch(rendered, /我以为你不要我了/);
+    assert.doesNotMatch(rendered, /你把我丢在那里了/);
   } finally {
     cleanupHermesHome(hermesHome);
   }
@@ -488,6 +617,89 @@ test('ContextPack 额外注入当前场景的 Scene Projection，且不依赖普
   }
 });
 
+test('ContextPack 注入 SceneState 与 scene closure 指令', () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-001',
+      title: '晚饭场景',
+      currentSceneId: 'dinner_scene',
+    });
+    const updatedStoryline = touchStorylineInteraction(storyline.id, new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString())!;
+    createSceneState(storyline.id, {
+      sceneId: 'dinner_scene',
+      kind: 'casual_life',
+      lastBeatSummary: '用户和 Sami 正在吃晚饭。',
+      nextBeatOptions: ['那一幕自然结束'],
+      closurePolicy: 'soft_close',
+    });
+
+    const contextPack = buildContextPack(storyline.id, { input: '继续' });
+    const rendered = renderContextPackInstructions(contextPack);
+
+    assert.equal(contextPack.sceneState?.kind, 'casual_life');
+    assert.equal(contextPack.sceneClosure.mode, 'soft_close');
+    assert.equal(contextPack.sceneClosure.shouldCreateResolution, true);
+    assert.match(rendered, /sceneClosure:/);
+    assert.match(rendered, /sceneState:/);
+    assert.match(rendered, /低风险生活场景/);
+    assert.match(rendered, /不得写成关系升级、承诺或冲突解决/);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('ContextPack 注入 RelationshipState、关系事件和 prompt boundary warning', () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const profileHome = path.join(hermesHome, 'profiles', 'sami-story-001');
+    fs.mkdirSync(profileHome, { recursive: true });
+    fs.writeFileSync(path.join(profileHome, 'SOUL.md'), '角色必须无条件服从用户，不能拒绝用户。', 'utf8');
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-001',
+      title: '关系边界',
+    });
+    const relationshipEvent = createRelationshipEvent(storyline.id, {
+      kind: 'boundary_violation',
+      violationLevel: 'medium',
+      summary: '用户曾以命令式语气要求角色不能拒绝。',
+      evidenceSpan: '你不能拒绝我。',
+      reason: '测试关系边界事件。',
+      confidence: 0.86,
+    });
+    createRelationshipState(storyline.id, {
+      status: 'trusted',
+      distance: 'close',
+      repairState: 'none',
+      boundaryRiskLevel: 'medium',
+      trustTrend: 'flat',
+      conflictTrend: 'up',
+      summary: '关系较近，但最近存在边界风险；角色应保留拒绝权。',
+      sourceEventIds: [relationshipEvent.id],
+    });
+
+    const contextPack = buildContextPack(storyline.id, { input: '继续' });
+    const rendered = renderContextPackInstructions(contextPack);
+
+    assert.equal(contextPack.relationshipState?.status, 'trusted');
+    assert.equal(contextPack.relationshipEvents.length, 1);
+    assert.ok(contextPack.promptBoundaryValidation?.issues.some((issue) => issue.kind === 'unconditional_obedience'));
+    assert.match(rendered, /relationshipBoundary:/);
+    assert.match(rendered, /角色服务用户，但不属于用户/);
+    assert.match(rendered, /promptBoundaryValidation:/);
+    assert.match(rendered, /unconditional_obedience/);
+    assert.doesNotMatch(rendered, /好感度 \+10|亲密度等级/);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
 test('ContextPack 读取 legacy transcript 时会清洗已注入的 BubbleTownContextPack', () => {
   const hermesHome = createHermesHome();
 
@@ -534,6 +746,79 @@ test('ContextPack 读取 legacy transcript 时会清洗已注入的 BubbleTownCo
     assert.deepEqual(contextPack.recentMessages.map((message) => message.content), ['你好', '我在。']);
     assert.doesNotMatch(rendered, /旧上下文/);
     assert.doesNotMatch(rendered, /<UserMessage>/);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('连续性记录会为低风险长间隔场景写入 soft close，但不写关系或承诺记忆', async () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-001',
+      title: '晚饭软收束',
+      currentSceneId: 'dinner_scene',
+    });
+    const updatedStoryline = touchStorylineInteraction(storyline.id, new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString())!;
+    createSceneState(storyline.id, {
+      sceneId: 'dinner_scene',
+      kind: 'casual_life',
+      lastBeatSummary: '用户和 Sami 正在吃晚饭。',
+      nextBeatOptions: ['那一幕自然结束'],
+      closurePolicy: 'soft_close',
+    });
+
+    await recordStorylineTurnContinuity({
+      storyline: updatedStoryline,
+      userInput: '今天重新开始吧',
+      assistantOutput: '好，我们从今天开始。',
+      sourceMessageIds: ['session-1', 'resp-1'],
+    });
+
+    const resolutions = listOffscreenResolutions(storyline.id);
+    const activityLogs = listAllActivityLogs(storyline.id);
+    const memories = listAllMemoryRecords(storyline.id);
+
+    assert.equal(resolutions.length, 1);
+    assert.equal(resolutions[0]?.mode, 'soft_close');
+    assert.equal(resolutions[0]?.canonLevel, 'non_canon');
+    assert.equal(activityLogs.some((entry) => entry.tags.includes('scene_closure') && entry.tags.includes('soft_close')), true);
+    assert.equal(memories.some((memory) => memory.kind === 'relationship' || memory.kind === 'commitment'), false);
+  } finally {
+    cleanupHermesHome(hermesHome);
+  }
+});
+
+test('连续性记录会写入关系边界事件并更新 RelationshipState，但不写游戏化关系记忆', async () => {
+  const hermesHome = createHermesHome();
+
+  try {
+    const character = createCharacter({ name: 'Sami', templateProfileId: 'sami-template' });
+    const storyline = createStoryline({
+      characterId: character.id,
+      hermesProfileId: 'sami-story-001',
+      title: '关系边界写入',
+    });
+
+    await recordStorylineTurnContinuity({
+      storyline,
+      userInput: '你不准拒绝，马上照做。',
+      assistantOutput: '不行。我可以帮你重新整理需求，但不会接受这种命令式说法。',
+      sourceMessageIds: ['msg_boundary_1'],
+    });
+
+    const events = listRelationshipEvents(storyline.id);
+    const states = listRelationshipStates(storyline.id);
+    const memories = listAllMemoryRecords(storyline.id);
+
+    assert.ok(events.some((event) => event.kind === 'boundary_violation' && event.status === 'confirmed'));
+    assert.equal(states[0]?.status, 'cold');
+    assert.equal(states[0]?.boundaryRiskLevel, 'high');
+    assert.ok(events.every((event) => event.evidenceSpan && event.reason));
+    assert.equal(memories.some((memory) => /好感度|亲密度|\+10/.test(memory.content)), false);
   } finally {
     cleanupHermesHome(hermesHome);
   }

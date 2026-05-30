@@ -1,3 +1,5 @@
+import type { PromptBoundaryValidation } from './story.js';
+
 export const DEFAULT_PROFILE_ID = 'default';
 
 export interface ProfileSummary {
@@ -30,6 +32,7 @@ export interface PrepareProfileForStorylineResponse {
   configPath: string;
   soulPath: string;
   changes: string[];
+  promptBoundaryValidation?: PromptBoundaryValidation;
 }
 
 export interface ResetProfileRuntimeSummary {
@@ -39,6 +42,12 @@ export interface ResetProfileRuntimeSummary {
   removedMemoryCount: number;
   removedSuppressedMemoryCount: number;
   removedActivityLogCount: number;
+  removedPendingSemanticFrameCount?: number;
+  removedOpenLoopCount?: number;
+  removedSceneStateCount?: number;
+  removedOffscreenResolutionCount?: number;
+  removedRelationshipStateCount?: number;
+  removedRelationshipEventCount?: number;
   removedCharacterCount: number;
   removedEmbeddingCount: number;
 }
@@ -49,4 +58,5 @@ export interface ResetProfileForStorylineResponse {
   soulPath: string;
   changes: string[];
   runtimeReset: ResetProfileRuntimeSummary;
+  promptBoundaryValidation?: PromptBoundaryValidation;
 }

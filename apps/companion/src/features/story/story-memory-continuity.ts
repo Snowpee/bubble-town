@@ -15,12 +15,22 @@ import type {
 import {
   createActivityLog,
   createMemoryRecord,
+  createOffscreenResolution,
+  createRelationshipEvent,
+  createRelationshipState,
   createSuppressedMemory,
+  listOffscreenResolutions,
   listAllActivityLogs,
   listAllMemoryRecords,
+  listOpenLoops,
   listPendingSemanticFrames,
+  listRelationshipEvents,
+  listRelationshipStates,
+  listSceneStates,
   listAllSuppressedMemories,
   updateActivityLog,
+  updateRelationshipState,
+  updateSceneState,
 } from '../../store/story-runtime-store.js';
 import { resolveAuxiliaryLlmRuntime } from '../../store/auxiliary-llm-store.js';
 import { extractLegacyRuleBasedMemoryCandidates } from '../memory/memory-candidates.js';
@@ -35,6 +45,9 @@ import { createStructuredWorldStateExtractor } from '../world-state/world-state-
 import type { WorldStateSideChannelGate } from '../world-state/world-state-side-channel.js';
 import { createStructuredWorldStateSideChannelGate } from '../world-state/world-state-side-channel.js';
 import { applyWorldStateUpdateCandidate, buildSceneProjection, getStorylineSceneId } from '../world-state/world-state.js';
+import { resolveResumeMode } from './context-pack.js';
+import { classifyRelationshipBoundaryTurn, resolveRelationshipStateUpdate } from './relationship-boundary.js';
+import { resolveSceneClosureContext } from './scene-closure.js';
 
 const pendingWorldStateJobs = new Map<string, Promise<void>>();
 const latestWorldStateDebugByStoryline = new Map<string, WorldStateDebugTrace>();
@@ -219,6 +232,122 @@ function extractSuppression(input: string): { pattern: string; reason: string } 
 
 function createActivitySummary(input: string, output: string): string {
   return `用户提到「${compact(input, 64)}」，角色回应「${compact(output, 72)}」。`;
+}
+
+function recordSceneClosureIfNeeded(storyline: Storyline) {
+  const sceneId = getStorylineSceneId(storyline);
+  const sceneState = listSceneStates(storyline.id).find((state) => state.sceneId === sceneId);
+  const existingResolution = listOffscreenResolutions(storyline.id).find((resolution) => resolution.sceneId === sceneId);
+  const sceneClosure = resolveSceneClosureContext({
+    resumeMode: resolveResumeMode(storyline.lastInteractionAt),
+    sceneState,
+    offscreenResolution: existingResolution,
+    openLoops: listOpenLoops(storyline.id),
+    pendingSemanticFrames: listPendingSemanticFrames(storyline.id),
+  });
+
+  if (!sceneState || !sceneClosure.shouldCreateResolution || !sceneClosure.summary || existingResolution) {
+    return undefined;
+  }
+
+  const activityLog = createActivityLog(storyline.id, {
+    summary: sceneClosure.summary,
+    tags: ['system', 'scene_closure', 'soft_close'],
+    sourceMessageIds: sceneState.sourceMessageIds,
+  });
+  const resolution = createOffscreenResolution(storyline.id, {
+    sceneId,
+    mode: sceneClosure.mode,
+    summary: sceneClosure.summary,
+    confidence: sceneClosure.confidence ?? 0.76,
+    canonLevel: sceneClosure.canonLevel ?? 'non_canon',
+    sourceSceneStateId: sceneState.id,
+    sourceActivityIds: [activityLog.id],
+    sourceMessageIds: sceneState.sourceMessageIds,
+  });
+  updateSceneState(sceneState.id, {
+    status: 'completed',
+    sourceActivityIds: Array.from(new Set([...(sceneState.sourceActivityIds ?? []), activityLog.id])),
+  });
+  return { activityLog, resolution };
+}
+
+function recordRelationshipBoundaryEvents(input: {
+  storyline: Storyline;
+  userInput: string;
+  sourceMessageIds?: string[];
+  sourceActivityId?: string;
+}) {
+  const currentState = listRelationshipStates(input.storyline.id)
+    .find((state) => state.characterId === input.storyline.characterId);
+  const recentEvents = listRelationshipEvents(input.storyline.id).slice(0, 8);
+  const decision = classifyRelationshipBoundaryTurn({
+    userInput: input.userInput,
+    recentEvents,
+    currentState,
+    sourceMessageIds: input.sourceMessageIds,
+    sourceActivityId: input.sourceActivityId,
+  });
+  if (decision.eventCandidates.length === 0) {
+    return {
+      events: [],
+      relationshipState: currentState,
+    };
+  }
+
+  const events = decision.eventCandidates.map((candidate) => (
+    createRelationshipEvent(input.storyline.id, candidate)
+  ));
+  const confirmedEvents = events.filter((event) => event.status === 'confirmed');
+  if (confirmedEvents.length === 0) {
+    return {
+      events,
+      relationshipState: currentState,
+    };
+  }
+
+  const stateUpdate = resolveRelationshipStateUpdate({
+    currentState,
+    events: confirmedEvents.map((event) => ({
+      kind: event.kind,
+      status: event.status,
+      violationLevel: event.violationLevel,
+      summary: event.summary,
+      evidenceSpan: event.evidenceSpan,
+      reason: event.reason,
+      confidence: event.confidence,
+      sourceActivityId: event.sourceActivityId,
+      sourceMessageIds: event.sourceMessageIds,
+    })),
+    createdEventIds: confirmedEvents.map((event) => event.id),
+    sourceActivityId: input.sourceActivityId,
+  });
+  if (!stateUpdate?.summary) {
+    return {
+      events,
+      relationshipState: currentState,
+    };
+  }
+
+  const relationshipState = currentState
+    ? updateRelationshipState(currentState.id, stateUpdate)
+    : createRelationshipState(input.storyline.id, {
+      status: stateUpdate.status,
+      distance: stateUpdate.distance,
+      repairState: stateUpdate.repairState,
+      boundaryRiskLevel: stateUpdate.boundaryRiskLevel,
+      trustTrend: stateUpdate.trustTrend,
+      conflictTrend: stateUpdate.conflictTrend,
+      summary: stateUpdate.summary,
+      privateNotes: stateUpdate.privateNotes,
+      sourceEventIds: stateUpdate.sourceEventIds,
+      sourceActivityIds: stateUpdate.sourceActivityIds,
+    });
+
+  return {
+    events,
+    relationshipState,
+  };
 }
 
 function createTurnSemanticEvent(input: {
@@ -549,8 +678,12 @@ export async function recordStorylineTurnContinuity(input: {
     pendingSemanticFrames: [] as ReturnType<typeof listPendingSemanticFrames>,
     resolvedPendingSemanticFrame: undefined as ReturnType<typeof resolvePendingSemanticFrameReply>['frame'],
     productMemoryWriteResults: [] as ProductMemoryWriteResult[],
+    sceneClosure: undefined as ReturnType<typeof recordSceneClosureIfNeeded>,
+    relationshipBoundary: undefined as ReturnType<typeof recordRelationshipBoundaryEvents> | undefined,
     worldStateDebug,
   };
+
+  created.sceneClosure = recordSceneClosureIfNeeded(input.storyline);
 
   const pendingResolution = resolvePendingSemanticFrameReply({
     storylineId: input.storyline.id,
@@ -583,6 +716,12 @@ export async function recordStorylineTurnContinuity(input: {
   }
   const recentActivityLogs = listRecentActivityLogContext(input.storyline.id, created.activityLog?.id);
   worldStateDebug.recentActivityLogs = recentActivityLogs;
+  created.relationshipBoundary = recordRelationshipBoundaryEvents({
+    storyline: input.storyline,
+    userInput: input.userInput,
+    sourceMessageIds: input.sourceMessageIds,
+    sourceActivityId: created.activityLog?.id,
+  });
 
   const suppression = extractSuppression(input.userInput);
   if (!suppression) {

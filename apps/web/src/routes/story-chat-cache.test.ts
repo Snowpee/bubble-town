@@ -33,6 +33,22 @@ describe('story chat cache', () => {
           tonight: ['a', 'b'],
         },
         continuityMode: 'live',
+        resumeMode: 'immediate_continue',
+        temporalResume: {
+          resumeMode: 'immediate_continue',
+          instruction: '短间隔自然续接。',
+        },
+        sceneClosure: {
+          mode: 'none',
+          instruction: '无场景闭合。',
+          shouldCreateResolution: false,
+        },
+        relationshipEvents: [],
+        relationshipBoundary: {
+          summary: '当前关系保持正常陪伴与协作。',
+          instruction: '角色服务用户，但不属于用户。',
+          recentEvents: [],
+        },
         conversationPacing: {
           topicShiftCommentAllowed: true,
           topicShiftCommentWindowMinutes: 20,
@@ -46,6 +62,7 @@ describe('story chat cache', () => {
         activityLogs: [],
         continuityHints: [],
         relativeTimeResults: [],
+        openLoops: [],
         systemInstructions: [],
       },
       renderedInstructions: 'test',

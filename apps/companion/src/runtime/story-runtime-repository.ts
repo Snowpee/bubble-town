@@ -4,7 +4,12 @@ import type {
   ActivityLog,
   Character,
   MemoryRecord,
+  OffscreenResolution,
+  OpenLoop,
   PendingSemanticFrame,
+  RelationshipEvent,
+  RelationshipState,
+  SceneState,
   RuntimeSession,
   Storyline,
   SuppressedMemory,
@@ -21,6 +26,11 @@ export interface StoryRuntimeSnapshot {
   suppressedMemories: SuppressedMemory[];
   activityLogs: ActivityLog[];
   pendingSemanticFrames: PendingSemanticFrame[];
+  openLoops: OpenLoop[];
+  sceneStates: SceneState[];
+  offscreenResolutions: OffscreenResolution[];
+  relationshipStates: RelationshipState[];
+  relationshipEvents: RelationshipEvent[];
 }
 
 export const EMPTY_STORY_RUNTIME_SNAPSHOT: StoryRuntimeSnapshot = {
@@ -32,6 +42,11 @@ export const EMPTY_STORY_RUNTIME_SNAPSHOT: StoryRuntimeSnapshot = {
   suppressedMemories: [],
   activityLogs: [],
   pendingSemanticFrames: [],
+  openLoops: [],
+  sceneStates: [],
+  offscreenResolutions: [],
+  relationshipStates: [],
+  relationshipEvents: [],
 };
 
 export interface StoryRuntimePersistenceAdapter {
@@ -75,6 +90,11 @@ export function normalizeStoryRuntimeSnapshot(parsed?: Partial<StoryRuntimeSnaps
     suppressedMemories: Array.isArray(parsed?.suppressedMemories) ? parsed.suppressedMemories : [],
     activityLogs: Array.isArray(parsed?.activityLogs) ? parsed.activityLogs : [],
     pendingSemanticFrames: Array.isArray(parsed?.pendingSemanticFrames) ? parsed.pendingSemanticFrames : [],
+    openLoops: Array.isArray(parsed?.openLoops) ? parsed.openLoops : [],
+    sceneStates: Array.isArray(parsed?.sceneStates) ? parsed.sceneStates : [],
+    offscreenResolutions: Array.isArray(parsed?.offscreenResolutions) ? parsed.offscreenResolutions : [],
+    relationshipStates: Array.isArray(parsed?.relationshipStates) ? parsed.relationshipStates : [],
+    relationshipEvents: Array.isArray(parsed?.relationshipEvents) ? parsed.relationshipEvents : [],
   };
 }
 
@@ -228,4 +248,64 @@ export function selectPendingSemanticFrames(snapshot: StoryRuntimeSnapshot, stor
   return snapshot.pendingSemanticFrames
     .filter((frame) => frame.storylineId === storylineId && frame.status === 'pending')
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export function selectOpenLoops(snapshot: StoryRuntimeSnapshot, storylineId: string): OpenLoop[] {
+  return snapshot.openLoops
+    .filter((loop) => loop.storylineId === storylineId && loop.status !== 'closed')
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export function selectSceneStates(snapshot: StoryRuntimeSnapshot, storylineId: string): SceneState[] {
+  return snapshot.sceneStates
+    .filter((state) => state.storylineId === storylineId && state.status !== 'archived')
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export function selectSceneStateForScene(
+  snapshot: StoryRuntimeSnapshot,
+  storylineId: string,
+  sceneId: string,
+): SceneState | undefined {
+  return selectSceneStates(snapshot, storylineId)
+    .find((state) => state.sceneId === sceneId);
+}
+
+export function selectOffscreenResolutions(
+  snapshot: StoryRuntimeSnapshot,
+  storylineId: string,
+): OffscreenResolution[] {
+  return snapshot.offscreenResolutions
+    .filter((resolution) => resolution.storylineId === storylineId)
+    .sort((left, right) => right.generatedAt.localeCompare(left.generatedAt));
+}
+
+export function selectOffscreenResolutionForScene(
+  snapshot: StoryRuntimeSnapshot,
+  storylineId: string,
+  sceneId: string,
+): OffscreenResolution | undefined {
+  return selectOffscreenResolutions(snapshot, storylineId)
+    .find((resolution) => resolution.sceneId === sceneId);
+}
+
+export function selectRelationshipStates(snapshot: StoryRuntimeSnapshot, storylineId: string): RelationshipState[] {
+  return snapshot.relationshipStates
+    .filter((state) => state.storylineId === storylineId)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+export function selectRelationshipStateForStoryline(
+  snapshot: StoryRuntimeSnapshot,
+  storylineId: string,
+  characterId: string,
+): RelationshipState | undefined {
+  return selectRelationshipStates(snapshot, storylineId)
+    .find((state) => state.characterId === characterId);
+}
+
+export function selectRelationshipEvents(snapshot: StoryRuntimeSnapshot, storylineId: string): RelationshipEvent[] {
+  return snapshot.relationshipEvents
+    .filter((event) => event.storylineId === storylineId && event.status !== 'dismissed')
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
